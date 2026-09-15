@@ -19,11 +19,13 @@ Expected `ssh.txt` format:
 
 ```text
 Host=157.173.209.199
-User=u123456789
+User=u229715236
 Port=65002
-Path=/home/u123456789/domains/state4627.btkdeals.com/public_html
+Path=domains/btkdeals.com/public_html/state4627
 Key=hostinger_ryan_ed25519
 ```
+
+If the private key is passphrase-protected, also set secret `HOSTINGER_SSH_KEY_PASSPHRASE`.
 
 Confirm the **Path** points at the `state4627` subdomain document root only.
 
@@ -40,6 +42,7 @@ Go to **Settings → Secrets and variables → Actions → New repository secret
 | `HOSTINGER_SSH_PORT` | `Port=` line in `ssh.txt` (usually `65002`) |
 | `HOSTINGER_DEPLOY_PATH` | `Path=` line in `ssh.txt` (must contain `state4627`) |
 | `HOSTINGER_SSH_PRIVATE_KEY` | Full contents of `hostinger_ryan_ed25519` |
+| `HOSTINGER_SSH_KEY_PASSPHRASE` | Passphrase for the encrypted private key (if applicable) |
 
 ### GitHub Environment (recommended)
 

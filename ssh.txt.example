@@ -1,8 +1,8 @@
 # Copy to your local "ssh keys" folder as ssh.txt (never commit the real file).
 # Place hostinger_ryan_ed25519 next to this file.
 
-Host=YOUR_FTP_IP_FROM_HPANEL
-User=u123456789
+Host=157.173.209.199
+User=u229715236
 Port=65002
-Path=/home/u123456789/domains/state4627.btkdeals.com/public_html
+Path=domains/btkdeals.com/public_html/state4627
 Key=hostinger_ryan_ed25519

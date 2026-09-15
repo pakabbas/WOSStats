@@ -31,12 +31,36 @@ if [[ "${HOSTINGER_DEPLOY_PATH}" != *state4627* ]]; then
     exit 1
 fi
 
+setup_ssh_agent_if_needed() {
+    if ! ssh-keygen -y -f "${HOSTINGER_SSH_KEY}" >/dev/null 2>&1; then
+        : "${HOSTINGER_SSH_KEY_PASSPHRASE:?HOSTINGER_SSH_KEY_PASSPHRASE is required (private key is encrypted)}"
+        eval "$(ssh-agent -s)" >/dev/null
+        ASKPASS_SCRIPT="$(mktemp)"
+        chmod 700 "${ASKPASS_SCRIPT}"
+        cat > "${ASKPASS_SCRIPT}" <<'ASKPASS'
+#!/bin/sh
+printf '%s' "${HOSTINGER_SSH_KEY_PASSPHRASE}"
+ASKPASS
+        export DISPLAY="${DISPLAY:-:1}"
+        export SSH_ASKPASS="${ASKPASS_SCRIPT}"
+        export SSH_ASKPASS_REQUIRE=force
+        ssh-add "${HOSTINGER_SSH_KEY}" </dev/null
+        trap 'ssh-agent -k >/dev/null 2>&1; rm -f "${ASKPASS_SCRIPT}"' EXIT
+        echo "Loaded encrypted SSH key via ssh-agent."
+    fi
+}
+
+setup_ssh_agent_if_needed
+
 SSH_OPTS=(
-    -i "${HOSTINGER_SSH_KEY}"
     -p "${HOSTINGER_SSH_PORT}"
     -o StrictHostKeyChecking=accept-new
     -o BatchMode=yes
 )
+
+if ssh-keygen -y -f "${HOSTINGER_SSH_KEY}" >/dev/null 2>&1; then
+    SSH_OPTS+=(-i "${HOSTINGER_SSH_KEY}")
+fi
 
 REMOTE="${HOSTINGER_SSH_USER}@${HOSTINGER_SSH_HOST}"
 
