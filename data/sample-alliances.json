@@ -1,0 +1,50 @@
+[
+    {
+        "id": "1001",
+        "name": "Northern Guard",
+        "tag": "ABC",
+        "rank": 1,
+        "power": 42300000000,
+        "members": 98
+    },
+    {
+        "id": "1002",
+        "name": "Frost Legion",
+        "tag": "XYZ",
+        "rank": 2,
+        "power": 38750000000,
+        "members": 96
+    },
+    {
+        "id": "1003",
+        "name": "Ice Breakers",
+        "tag": "ICE",
+        "rank": 3,
+        "power": 35200000000,
+        "members": 94
+    },
+    {
+        "id": "1004",
+        "name": "Blizzard Kings",
+        "tag": "BLK",
+        "rank": 4,
+        "power": 31800000000,
+        "members": 92
+    },
+    {
+        "id": "1005",
+        "name": "Snow Wolves",
+        "tag": "SNW",
+        "rank": 5,
+        "power": 28900000000,
+        "members": 90
+    },
+    {
+        "id": "1006",
+        "name": "Arctic Storm",
+        "tag": "ARC",
+        "rank": 6,
+        "power": 26500000000,
+        "members": 88
+    }
+]

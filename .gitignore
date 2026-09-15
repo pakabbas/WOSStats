@@ -1,0 +1,4 @@
+config.json
+data/alliances.json
+data/history.json
+data/*.tmp
