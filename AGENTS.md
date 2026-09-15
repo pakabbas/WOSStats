@@ -29,18 +29,32 @@ php -r '$_GET["token"]=json_decode(file_get_contents("config.json"), true)["upda
 
 Deploy **only** to the `state4627.btkdeals.com` document root. Do not modify other domains or projects on the Hostinger account.
 
-Required env vars for `deploy.sh`:
+Hostinger credentials come from the user's local `ssh keys` folder (`ssh.txt` + `hostinger_ryan_ed25519`). **Do not commit those files.**
 
-- `HOSTINGER_SSH_HOST` — FTP/SSH IP from hPanel (often port **65002**)
-- `HOSTINGER_SSH_USER` — SSH username (e.g. `u123456789`)
-- `HOSTINGER_SSH_PORT` — usually `65002`
-- `HOSTINGER_SSH_KEY` — path to Hostinger private key file in the VM
-- `HOSTINGER_DEPLOY_PATH` — must contain `state4627`, e.g. `/home/u…/domains/state4627.btkdeals.com/public_html`
+### Cursor Cloud secrets (same names as GitHub Actions)
+
+- `HOSTINGER_SSH_HOST`
+- `HOSTINGER_SSH_USER`
+- `HOSTINGER_SSH_PORT` (usually `65002`)
+- `HOSTINGER_DEPLOY_PATH` (must contain `state4627`)
+- `HOSTINGER_SSH_PRIVATE_KEY` (contents of `hostinger_ryan_ed25519`)
+
+Or load from files if mounted in the VM:
 
 ```bash
-chmod +x deploy.sh
+export SSH_DIR="/path/to/ssh keys"
+source scripts/load-hostinger-env.sh
 ./deploy.sh
 ```
+
+Or pass secrets directly:
+
+```bash
+export HOSTINGER_SSH_PRIVATE_KEY="..."
+./deploy.sh
+```
+
+Full setup: [.github/DEPLOYMENT.md](.github/DEPLOYMENT.md)
 
 After deploy, run the first update via cron or:
 

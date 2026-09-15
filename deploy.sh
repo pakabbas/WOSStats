@@ -6,16 +6,25 @@ set -euo pipefail
 #   HOSTINGER_SSH_HOST      e.g. 157.173.209.199
 #   HOSTINGER_SSH_USER      e.g. u123456789
 #   HOSTINGER_SSH_PORT      e.g. 65002
-#   HOSTINGER_SSH_KEY       path to private key file
-#   HOSTINGER_DEPLOY_PATH   e.g. /home/u123456789/domains/state4627.btkdeals.com/public_html
+#   HOSTINGER_SSH_KEY            path to private key file (hostinger_ryan_ed25519)
+#   HOSTINGER_SSH_PRIVATE_KEY    alternative: private key contents (GitHub Actions / Cursor secrets)
+#   HOSTINGER_DEPLOY_PATH        e.g. /home/u123456789/domains/state4627.btkdeals.com/public_html
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 : "${HOSTINGER_SSH_HOST:?HOSTINGER_SSH_HOST is required}"
 : "${HOSTINGER_SSH_USER:?HOSTINGER_SSH_USER is required}"
 : "${HOSTINGER_SSH_PORT:=65002}"
-: "${HOSTINGER_SSH_KEY:?HOSTINGER_SSH_KEY is required}"
 : "${HOSTINGER_DEPLOY_PATH:?HOSTINGER_DEPLOY_PATH is required}"
+
+if [[ -z "${HOSTINGER_SSH_KEY:-}" && -n "${HOSTINGER_SSH_PRIVATE_KEY:-}" ]]; then
+    HOSTINGER_SSH_KEY="$(mktemp)"
+    chmod 600 "${HOSTINGER_SSH_KEY}"
+    printf '%s\n' "${HOSTINGER_SSH_PRIVATE_KEY}" > "${HOSTINGER_SSH_KEY}"
+    trap 'rm -f "${HOSTINGER_SSH_KEY}"' EXIT
+fi
+
+: "${HOSTINGER_SSH_KEY:?HOSTINGER_SSH_KEY or HOSTINGER_SSH_PRIVATE_KEY is required}"
 
 if [[ "${HOSTINGER_DEPLOY_PATH}" != *state4627* ]]; then
     echo "Refusing to deploy: HOSTINGER_DEPLOY_PATH must contain 'state4627'." >&2

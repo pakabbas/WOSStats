@@ -2,3 +2,9 @@ config.json
 data/alliances.json
 data/history.json
 data/*.tmp
+
+# SSH / Hostinger (never commit)
+ssh.txt
+hostinger_ryan_ed25519
+hostinger_ryan_ed25519.pub
+*.pem

@@ -158,6 +158,16 @@ Recommended cron using curl:
     └── app.js
 ```
 
+## Deployment (Hostinger — State 4627)
+
+Production URL: https://state4627.btkdeals.com
+
+See **[.github/DEPLOYMENT.md](.github/DEPLOYMENT.md)** for:
+
+- Mapping `D:\ssh\ssh keys\ssh.txt` + `hostinger_ryan_ed25519` to GitHub/Cursor secrets
+- GitHub Actions deploy workflow (`production-state4627` environment)
+- Manual `./deploy.sh` from Cloud Agents
+
 ## License
 
 Internal tool — modify freely for your state.
