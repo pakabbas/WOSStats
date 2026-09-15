@@ -31,8 +31,17 @@ if [[ "${HOSTINGER_DEPLOY_PATH}" != *state4627* ]]; then
     exit 1
 fi
 
+validate_passphrase_secret() {
+    if [[ -n "${HOSTINGER_SSH_KEY_PASSPHRASE:-}" && "${HOSTINGER_SSH_KEY_PASSPHRASE}" == *BEGIN*OPENSSH* ]]; then
+        echo "Error: HOSTINGER_SSH_KEY_PASSPHRASE contains a private key, not the key passphrase." >&2
+        echo "Set HOSTINGER_SSH_KEY_PASSPHRASE to the short password for hostinger_ryan_ed25519." >&2
+        exit 1
+    fi
+}
+
 setup_ssh_agent_if_needed() {
     if ! ssh-keygen -y -f "${HOSTINGER_SSH_KEY}" >/dev/null 2>&1; then
+        validate_passphrase_secret
         : "${HOSTINGER_SSH_KEY_PASSPHRASE:?HOSTINGER_SSH_KEY_PASSPHRASE is required (private key is encrypted)}"
         eval "$(ssh-agent -s)" >/dev/null
         ASKPASS_SCRIPT="$(mktemp)"

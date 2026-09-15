@@ -5,21 +5,21 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - '**.md'
-      - '.github/**'
-      - 'Requirements.md'
-      - 'ssh.txt.example'
 
 concurrency:
   group: deploy-state4627
   cancel-in-progress: true
 
+env:
+  HOSTINGER_SSH_HOST: 157.173.209.199
+  HOSTINGER_SSH_USER: u229715236
+  HOSTINGER_SSH_PORT: 65002
+  HOSTINGER_DEPLOY_PATH: domains/btkdeals.com/public_html/state4627
+
 jobs:
   deploy:
     name: Deploy to state4627.btkdeals.com
     runs-on: ubuntu-latest
-    environment: production-state4627
 
     steps:
       - name: Checkout
@@ -27,25 +27,79 @@ jobs:
 
       - name: Validate deploy path
         run: |
-          if [[ "${{ secrets.HOSTINGER_DEPLOY_PATH }}" != *state4627* ]]; then
-            echo "Refusing to deploy: HOSTINGER_DEPLOY_PATH must contain state4627"
+          if [[ "${HOSTINGER_DEPLOY_PATH}" != *state4627* ]]; then
+            echo "Refusing to deploy: path must contain state4627"
             exit 1
           fi
 
-      - name: Install rsync
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq rsync
+      - name: Install rsync and openssh-client
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq rsync openssh-client
 
-      - name: Deploy via SSH (state4627 only)
+      - name: Configure SSH key
         env:
-          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
-          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
-          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
-          HOSTINGER_SSH_PRIVATE_KEY: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
-          HOSTINGER_DEPLOY_PATH: ${{ secrets.HOSTINGER_DEPLOY_PATH }}
+          SSH_PRIVATE_KEY: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
+          SSH_PASSPHRASE: ${{ secrets.HOSTINGER_SSH_KEY_PASSPHRASE }}
         run: |
-          chmod +x deploy.sh
-          ./deploy.sh
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          eval "$(ssh-agent -s)"
+          if ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null 2>&1; then
+            echo "Using unencrypted deploy key"
+            ssh-add ~/.ssh/deploy_key
+          else
+            ASKPASS_SCRIPT="$(mktemp)"
+            chmod 700 "$ASKPASS_SCRIPT"
+            cat > "$ASKPASS_SCRIPT" <<'SCRIPT'
+#!/bin/sh
+printf '%s' "$SSH_PASSPHRASE"
+SCRIPT
+            export SSH_PASSPHRASE
+            export DISPLAY=:1
+            export SSH_ASKPASS="$ASKPASS_SCRIPT"
+            export SSH_ASKPASS_REQUIRE=force
+            ssh-add ~/.ssh/deploy_key </dev/null
+            rm -f "$ASKPASS_SCRIPT"
+          fi
+          ssh-add -l
+
+      - name: Ensure remote directory exists
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new -p "$HOSTINGER_SSH_PORT" \
+            "${HOSTINGER_SSH_USER}@${HOSTINGER_SSH_HOST}" \
+            "mkdir -p '${HOSTINGER_DEPLOY_PATH}/data'"
+
+      - name: Rsync application (state4627 only)
+        run: |
+          rsync -avz --delete \
+            -e "ssh -p ${HOSTINGER_SSH_PORT} -o StrictHostKeyChecking=accept-new" \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude 'config.json' \
+            --exclude 'data/alliances.json' \
+            --exclude 'data/history.json' \
+            --exclude 'data/*.tmp' \
+            --exclude 'Requirements.md' \
+            --exclude 'deploy.sh' \
+            --exclude 'scripts/' \
+            --exclude 'ssh.txt.example' \
+            ./ "${HOSTINGER_SSH_USER}@${HOSTINGER_SSH_HOST}:${HOSTINGER_DEPLOY_PATH}/"
+
+      - name: Post-deploy server setup
+        run: |
+          ssh -p "$HOSTINGER_SSH_PORT" -o StrictHostKeyChecking=accept-new \
+            "${HOSTINGER_SSH_USER}@${HOSTINGER_SSH_HOST}" \
+            "cd '${HOSTINGER_DEPLOY_PATH}' && \
+             mkdir -p data && chmod 755 data && \
+             if [ ! -f config.json ]; then \
+               TOKEN=\$(php -r 'echo bin2hex(random_bytes(16));'); \
+               printf '%s\n' \"{\\\"state_id\\\":\\\"4627\\\",\\\"state_name\\\":\\\"State 4627\\\",\\\"api_url\\\":\\\"\\\",\\\"api_key\\\":\\\"\\\",\\\"update_token\\\":\\\"\$TOKEN\\\",\\\"sample_mode\\\":false,\\\"nap_alliances\\\":[]}\" > config.json; \
+               chmod 600 config.json; \
+             fi && \
+             [ -f data/alliances.json ] || echo '[]' > data/alliances.json && \
+             [ -f data/history.json ] || echo '[]' > data/history.json"
 
       - name: Smoke test
         run: |
-          curl -fsS --retry 3 --retry-delay 5 "https://state4627.btkdeals.com/" | grep -qi "whiteout\|alliance\|set to go" || true
+          curl -fsS --retry 5 --retry-delay 5 "https://state4627.btkdeals.com/" | tee /tmp/home.html
+          grep -qi 'whiteout\|alliance\|set to go' /tmp/home.html
