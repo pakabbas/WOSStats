@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'cursor/**'
+
+jobs:
+  php-lint:
+    name: PHP syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint PHP files
+        run: |
+          find . -name '*.php' -not -path './.git/*' -print0 | while IFS= read -r -d '' f; do
+            php -l "$f"
+          done

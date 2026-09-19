@@ -1,0 +1,93 @@
+{
+  "rules": {
+    "chat": {
+      "messages": {
+        ".read": true,
+        ".write": true,
+        ".indexOn": ["createdAt"],
+        "$messageId": {
+          ".validate": "newData.hasChildren(['nick', 'createdAt']) && ((newData.hasChild('text') && newData.child('text').isString() && newData.child('text').val().length > 0) || (newData.hasChild('imageUrl') && newData.child('imageUrl').isString() && newData.child('imageUrl').val().length > 0))",
+          "nick": {
+            ".validate": "newData.isString() && newData.val().length >= 2 && newData.val().length <= 20"
+          },
+          "text": {
+            ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 300)"
+          },
+          "imageUrl": {
+            ".validate": "!newData.exists() || (newData.isString() && newData.val().beginsWith('https://') && newData.val().length <= 2000)"
+          },
+          "createdAt": {
+            ".validate": "newData.isNumber() && newData.val() > 0"
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      }
+    },
+    "users": {
+      ".read": "auth != null",
+      "$uid": {
+        ".write": "auth != null && auth.uid === $uid",
+        ".validate": "newData.hasChildren(['uid', 'displayName', 'updatedAt'])",
+        "uid": {
+          ".validate": "newData.isString() && newData.val() === $uid"
+        },
+        "displayName": {
+          ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 80"
+        },
+        "email": {
+          ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 200)"
+        },
+        "photoURL": {
+          ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 2000)"
+        },
+        "createdAt": {
+          ".validate": "newData.isNumber() && newData.val() > 0"
+        },
+        "updatedAt": {
+          ".validate": "newData.isNumber() && newData.val() > 0"
+        },
+        "lastSeen": {
+          ".validate": "!newData.exists() || (newData.isNumber() && newData.val() > 0)"
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    },
+    "dm": {
+      "$threadId": {
+        ".read": "auth != null && ($threadId.beginsWith(auth.uid + '_') || $threadId.endsWith('_' + auth.uid))",
+        ".write": "auth != null && ($threadId.beginsWith(auth.uid + '_') || $threadId.endsWith('_' + auth.uid))",
+        "messages": {
+          ".indexOn": ["createdAt"],
+          "$messageId": {
+            ".validate": "newData.hasChildren(['fromUid', 'fromName', 'createdAt']) && ((newData.hasChild('text') && newData.child('text').isString() && newData.child('text').val().length > 0) || (newData.hasChild('imageUrl') && newData.child('imageUrl').isString() && newData.child('imageUrl').val().length > 0))",
+            "fromUid": {
+              ".validate": "newData.isString() && newData.val() === auth.uid"
+            },
+            "fromName": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 80"
+            },
+            "text": {
+              ".validate": "!newData.exists() || (newData.isString() && newData.val().length <= 300)"
+            },
+            "imageUrl": {
+              ".validate": "!newData.exists() || (newData.isString() && newData.val().beginsWith('https://') && newData.val().length <= 2000)"
+            },
+            "createdAt": {
+              ".validate": "newData.isNumber() && newData.val() > 0"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        },
+        "$other": {
+          ".validate": false
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,46 @@
+# Secrets / local config
+config.json
+client_secret*.json
+**/client_secret*.json
+*.pem
+ssh.txt
+hostinger_ryan_ed25519
+hostinger_ryan_ed25519.pub
+.deploy-keys/
+actionlint
+
+# Runtime / generated data
+data/alliances.json
+data/history.json
+data/players.json
+data/players-history.json
+data/rosters-history.json
+data/player-lookup-cache.json
+data/atlas-cookies.txt
+data/incidents.json
+data/incidents.json.lock
+data/nap-banned.json
+data/video-meta.json
+data/cron-update.log
+data/sample-alliances.json
+data/*.tmp
+data/rosters/
+data/roster-imports/
+data/roster-powers/
+
+# Uploads (keep folder placeholders via .htaccess)
+uploads/video/*
+!uploads/video/.htaccess
+uploads/chat/*
+!uploads/chat/.htaccess
+uploads/incidents/*
+!uploads/incidents/.htaccess
+
+# Logs / IDE / OS
+error_log
+.cursor/
+.vscode/
+.DS_Store
+Thumbs.db
+__pycache__/
+node_modules/

@@ -1,0 +1,11 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /chat/images/{imageId} {
+      allow read: if true;
+      allow write: if request.resource.size > 0
+                   && request.resource.size <= 256 * 1024
+                   && request.resource.contentType.matches('image/(jpeg|png|webp|gif)');
+    }
+  }
+}

@@ -1,0 +1,256 @@
+WOSTracker — updatePower API (bot instructions)
+================================================
+
+Site: https://wostracker.online/
+Purpose: Read the uploaded State power-ranking VIDEO, extract visible players,
+then POST them so powers are MERGED into the existing leaderboard.
+
+CRITICAL — MERGE ONLY (never replace / never delete)
+----------------------------------------------------
+  - This API does NOT wipe the leaderboard.
+  - Partial uploads are expected (10, 20, 50 names — all fine).
+  - Existing players who are NOT in your POST always stay.
+  - players_after must be >= players_before (server enforces this).
+  - Only NEW names (not already on the board) are added.
+  - Matching is by PLAYER NAME (alliance [TAG] prefix optional).
+  - Do NOT send id/uid. Do NOT invent IDs.
+
+If the response is missing "mode":"merge" or "never_deletes":true,
+stop and tell the operator the server API is outdated.
+
+
+Auth token
+----------
+Use the site `update_token` from config.json.
+Replace EVERY occurrence of YOUR_UPDATE_TOKEN below with that value.
+
+Do NOT share the token publicly.
+
+
+Step 0 — Check last upload + OCR key (no token)
+-----------------------------------------------
+GET https://wostracker.online/LastUpload.php
+
+Success when a video exists:
+
+  {
+    "ok": true,
+    "has_video": true,
+    "ocr_key": "K7M2PX",
+    "uploaded_at": "2026-09-19 06:31:12",
+    "uploaded_at_utc": "2026-09-19 06:31:12 UTC",
+    "video_path": "uploads/video/video-YYYYMMDD-HHMMSS.mp4",
+    "video_url": "https://wostracker.online/uploads/video/video-YYYYMMDD-HHMMSS.mp4",
+    "todays_video_page": "https://wostracker.online/TodaysVideo.php"
+  }
+
+When no video:
+
+  {
+    "ok": true,
+    "has_video": false,
+    "ocr_key": null,
+    "uploaded_at": null,
+    "uploaded_at_utc": null,
+    "video_path": null,
+    "video_url": null,
+    "todays_video_page": "https://wostracker.online/TodaysVideo.php"
+  }
+
+Notes:
+  - ocr_key is a random 6-character code (A–Z / 2–9, no 0/O/1/I/L).
+  - A NEW ocr_key is generated every time a human uploads a video on Upload.php.
+  - uploaded_at is UTC wall-clock time of that upload.
+  - Use this API to detect a fresh video (uploaded_at / ocr_key changed)
+    before spending OCR time.
+
+
+Step 1 — Get the current video
+------------------------------
+Option A — Bot page (preferred for vision / screen capture):
+
+  https://wostracker.online/TodaysVideo.php
+
+  - Shows ONLY the current uploaded video (full screen, autoplay muted).
+  - White top bar with large OCR KEY text (same value as LastUpload.php → ocr_key).
+  - No nav, no upload UI.
+  - If no video is uploaded, the page says "No video uploaded yet."
+
+  OCR verification:
+  1. Call LastUpload.php and read ocr_key.
+  2. Open TodaysVideo.php and OCR the top “OCR KEY” bar.
+  3. Keys MUST match before you trust extracted player rows.
+  4. If keys differ, refresh / wait — you may be looking at a stale capture.
+
+Option B — API status (JSON, needs token):
+
+  GET https://wostracker.online/api/updatePower.php?token=YOUR_UPDATE_TOKEN
+
+Success response (example):
+
+  {
+    "ok": true,
+    "action": "status",
+    "mode": "merge",
+    "never_deletes": true,
+    "match_by": "name",
+    "max_players": 200,
+    "video_url": "https://wostracker.online/uploads/video/video-YYYYMMDD-HHMMSS.mp4",
+    "video_path": "uploads/video/video-YYYYMMDD-HHMMSS.mp4",
+    "has_video": true,
+    "ocr_key": "K7M2PX",
+    "uploaded_at": "2026-09-19 06:31:12",
+    "players_count": 200,
+    "upload_page": "https://wostracker.online/Upload.php",
+    "todays_video_page": "https://wostracker.online/TodaysVideo.php",
+    "last_upload_api": "https://wostracker.online/LastUpload.php",
+    "post_url": "https://wostracker.online/api/updatePower.php",
+    "required_fields": ["name", "power"],
+    "optional_fields": ["rank", "stove_lv", "last_jump_pct"]
+  }
+
+If has_video is false / video_url is null:
+  - Stop. Tell the operator to upload a video at:
+    https://wostracker.online/Upload.php
+  - Then open / retry:
+    https://wostracker.online/TodaysVideo.php
+    https://wostracker.online/LastUpload.php
+
+
+Step 2 — Analyze the video
+--------------------------
+Open TodaysVideo.php (Option A) or download video_url from Step 1 (Option B).
+
+First OCR the OCR KEY bar and confirm it matches LastUpload.php.
+
+Then extract the STATE POWER / player ranking list shown in the video.
+For each visible player, capture ONLY:
+
+  REQUIRED
+  - name   → exact in-game name as shown (primary identity)
+  - power  → integer; commas/spaces OK, e.g. "77,855,639"
+
+  STRONGLY RECOMMENDED
+  - rank   → 1 = top of the list
+
+  OPTIONAL (only if clearly readable)
+  - stove_lv
+  - last_jump_pct
+
+  DO NOT SEND
+  - id / uid
+
+Rules for extraction:
+  - Prefer accuracy over guessing. Skip unreadable rows.
+  - Partial batches are OK — you do NOT need all 200 in one POST.
+  - Rank order should match the video when possible.
+  - Power must be numeric after cleanup (API strips commas).
+  - Keep symbols / alliance prefixes in the name when visible.
+  - Top players pinned at the top of the video: capture those too.
+
+
+Step 3 — POST merge update (by name)
+------------------------------------
+Endpoint:
+
+  POST https://wostracker.online/api/updatePower.php
+  Content-Type: application/json
+
+Body (preferred — array of players):
+
+  {
+    "token": "YOUR_UPDATE_TOKEN",
+    "players": [
+      { "rank": 1, "name": "[LUX]Plutomoon", "power": 77855639 },
+      { "rank": 2, "name": "[WaS]Djairo", "power": 82465500 },
+      { "rank": 3, "name": "[LUX]Jupiter", "power": 61863096 }
+    ]
+  }
+
+Also accepted — object keyed by NAME (not id):
+
+  {
+    "token": "YOUR_UPDATE_TOKEN",
+    "players": {
+      "[LUX]Plutomoon": { "rank": 1, "power": 77855639 },
+      "[WaS]Djairo": { "rank": 2, "power": 82465500 }
+    }
+  }
+
+What the server does:
+  - Finds each name on the current board (with or without [TAG]).
+  - Updates that player's power when appropriate.
+  - Leaves every other player untouched.
+  - Adds a name only if it is not already on the board.
+  - Re-sorts by power and caps at 200 only when over 200.
+  - Appends history when something changed (never clears old history).
+  - REFUSES to save if the board would shrink.
+
+Token may instead be sent as:
+  ?token=YOUR_UPDATE_TOKEN
+  Authorization: Bearer YOUR_UPDATE_TOKEN
+  X-Update-Token: YOUR_UPDATE_TOKEN
+
+curl example:
+
+  curl -X POST "https://wostracker.online/api/updatePower.php" \
+    -H "Content-Type: application/json" \
+    -d "{\"token\":\"YOUR_UPDATE_TOKEN\",\"players\":[{\"rank\":1,\"name\":\"[LUX]Plutomoon\",\"power\":77855639}]}"
+
+Success response (example):
+
+  {
+    "ok": true,
+    "action": "merge",
+    "mode": "merge",
+    "never_deletes": true,
+    "match_by": "name",
+    "received": 20,
+    "matched": 18,
+    "added": 2,
+    "power_increased": 15,
+    "skipped_not_higher": 3,
+    "skipped_no_name": 0,
+    "skipped_no_power": 0,
+    "players_before": 200,
+    "players_after": 200,
+    "history_written": true,
+    "max_players": 200,
+    "file": "data/players.json",
+    "updated_at": "2026-09-17 07:30:00",
+    "video_url": "https://wostracker.online/uploads/video/video-YYYYMMDD-HHMMSS.mp4"
+  }
+
+VERIFY AFTER EVERY POST:
+  - ok === true
+  - mode === "merge"
+  - never_deletes === true
+  - players_after >= players_before
+  If players_after < players_before, treat as FAILURE (should not happen).
+
+Error responses:
+  - 403 { "ok": false, "error": "Forbidden" }  → bad/missing token
+  - 500 { "ok": false, "error": "..." }        → validation / refused shrink
+
+
+Recommended bot workflow
+------------------------
+1. GET https://wostracker.online/LastUpload.php
+   - If has_video is false → ask operator to upload on Upload.php
+   - Remember ocr_key + uploaded_at
+2. Open https://wostracker.online/TodaysVideo.php
+3. OCR the top OCR KEY → must equal LastUpload.php ocr_key
+4. OCR / vision → build players[] with name + power (+ rank)
+5. POST partial batch (no ids)
+6. Confirm ok + mode=merge + players_after >= players_before
+7. If matched is 0, retry with exact on-screen names (keep [TAG] if shown)
+8. On later runs: poll LastUpload.php; only re-OCR when uploaded_at / ocr_key changes
+
+
+Related pages
+-------------
+Last upload API:      https://wostracker.online/LastUpload.php
+Today's video (bot):  https://wostracker.online/TodaysVideo.php
+Upload video (human): https://wostracker.online/Upload.php
+Players page:         https://wostracker.online/players.php
+API endpoint:         https://wostracker.online/api/updatePower.php

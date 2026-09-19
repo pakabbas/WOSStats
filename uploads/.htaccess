@@ -1,0 +1,10 @@
+# Block PHP / scripts in uploads
+<FilesMatch "\.(?i:php|phtml|php3|php4|php5|php7|phps|cgi|pl|py|exe|sh)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+</FilesMatch>
+
+Options -Indexes -ExecCGI
+RemoveHandler .php .phtml .php3 .php4 .php5
+RemoveType .php .phtml .php3 .php4 .php5

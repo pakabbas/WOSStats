@@ -1,0 +1,24 @@
+{
+    "state_id": "4627",
+    "state_name": "State 4627",
+    "api_url": "https://api.wosatlas.com/v1/alliances/leaderboard?limit=20&kid={state_id}",
+    "players_api_url": "https://api.wosatlas.com/v1/power/leaderboard?limit=200&kid={state_id}",
+    "api_key": "",
+    "atlas_email": "",
+    "atlas_password": "",
+    "update_token": "CHANGE_ME",
+    "sample_mode": false,
+    "nap_alliances": ["MaD", "LUX", "RRV", "B2K", "WaS", "QZQ", "UWD", "AOC"],
+    "google_oauth": {
+        "client_id": "YOUR_GOOGLE_WEB_CLIENT_ID.apps.googleusercontent.com",
+        "client_secret": "YOUR_GOOGLE_CLIENT_SECRET"
+    },
+    "db": {
+        "host": "localhost",
+        "port": 3306,
+        "name": "u229715236_WosTracker",
+        "user": "u229715236_WosTracker",
+        "pass": "CHANGE_ME",
+        "charset": "utf8mb4"
+    }
+}

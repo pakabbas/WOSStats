@@ -1,0 +1,27 @@
+DirectoryIndex index.php index.html
+
+<IfModule mod_authz_core.c>
+    <Files "config.json">
+        Require all denied
+    </Files>
+</IfModule>
+
+<IfModule mod_authz_core.c>
+    <FilesMatch "\.(json|tmp)$">
+        Require all denied
+    </FilesMatch>
+</IfModule>
+
+# Allow access to assets
+<IfModule mod_authz_core.c>
+    <FilesMatch "\.(css|js|png|jpg|jpeg|gif|svg|ico|webp)$">
+        Require all granted
+    </FilesMatch>
+</IfModule>
+
+# Avoid week-long CDN/browser stale CSS after deploys
+<IfModule mod_headers.c>
+    <FilesMatch "\.(css|js)$">
+        Header set Cache-Control "public, max-age=300, must-revalidate"
+    </FilesMatch>
+</IfModule>

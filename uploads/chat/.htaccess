@@ -1,0 +1,16 @@
+# Chat images only
+<FilesMatch "\.(?i:jpe?g|png|gif|webp)$">
+    <IfModule mod_authz_core.c>
+        Require all granted
+    </IfModule>
+</FilesMatch>
+
+<FilesMatch "\.(?i:php|phtml|php3|php4|php5|php7|phps|cgi|pl|py|exe|sh|html|htm|js)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+</FilesMatch>
+
+Options -Indexes -ExecCGI
+RemoveHandler .php .phtml .php3 .php4 .php5
+RemoveType .php .phtml .php3 .php4 .php5
