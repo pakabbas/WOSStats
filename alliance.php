@@ -104,6 +104,12 @@ if ($showRoster) {
                 <?php endif; ?>
             </h1>
             <p class="subtitle">Tag: <strong>[<?= h((string) ($alliance['tag'] ?? '—')) ?>]</strong></p>
+            <p class="page-header-actions">
+                <button type="button" class="refresh-data-btn" id="refresh-alliances" title="Refresh data (same as run.php)">
+                    Refresh
+                </button>
+                <span id="refresh-alliances-status" class="refresh-data-status" role="status" aria-live="polite"></span>
+            </p>
         </header>
 
         <section class="stats-grid stats-grid-compact">
