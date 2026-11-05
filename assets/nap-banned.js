@@ -200,9 +200,12 @@
         lookupBtn.disabled = true;
 
         try {
-            const res = await fetch(`player-info.php?uid=${encodeURIComponent(uid)}`, {
-                headers: { Accept: "application/json" },
-            });
+            const lookupEndpoint =
+                lookupBtn.getAttribute("data-lookup-url") || "player-info.php";
+            const res = await fetch(
+                `${lookupEndpoint}?uid=${encodeURIComponent(uid)}`,
+                { headers: { Accept: "application/json" } }
+            );
             const data = await res.json();
             if (!data?.ok || !data.player) {
                 setStatus(data?.error || "Player not found.", true);
@@ -218,7 +221,10 @@
             }
 
             showPreview(player);
-            setStatus("Player found — review and add with password.", false);
+            const foundMsg =
+                lookupBtn.getAttribute("data-found-message") ||
+                "Player found — review and add with password.";
+            setStatus(foundMsg, false);
         } catch (e) {
             setStatus("Lookup failed. You can still add by name only.", true);
             clearPreview();

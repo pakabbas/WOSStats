@@ -121,7 +121,7 @@ $stateName = $config['state_name'] ?? ('State ' . ($config['state_id'] ?? ''));
 
                         <div class="chat-compose-row">
                             <button type="button" id="chat-emoji-toggle" class="chat-icon-btn" title="Emoji" aria-label="Emoji">😊</button>
-                            <button type="button" id="chat-image-btn" class="chat-image-btn" title="Attach image (max 512 KB)" aria-label="Attach image">
+                            <button type="button" id="chat-image-btn" class="chat-image-btn" title="Attach image (max 12 MB)" aria-label="Attach image">
                                 <span class="chat-image-btn-icon" aria-hidden="true">
                                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                                         <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/>
@@ -158,7 +158,7 @@ $stateName = $config['state_name'] ?? ('State ' . ($config['state_id'] ?? ''));
                     <ol class="chat-guide">
                         <li>Choose your language at the top</li>
                         <li>Pick a nick (2–20 characters)</li>
-                        <li>Paste or attach an image (max 512 KB)</li>
+                        <li>Paste or attach an image (max 12 MB)</li>
                         <li>Tap ⇄ beside a message to translate</li>
                         <li>Original stays on top; translation below</li>
                     </ol>
@@ -179,7 +179,7 @@ $stateName = $config['state_name'] ?? ('State ' . ($config['state_id'] ?? ''));
 
                 <p class="chat-side-credit">
                     Built by <strong>Abbas</strong>
-                    · <a href="https://wa.me/923052848987" target="_blank" rel="noopener noreferrer">WhatsApp</a>
+                    · <?php renderWhatsAppIconLink(); ?>
                 </p>
             </aside>
         </section>

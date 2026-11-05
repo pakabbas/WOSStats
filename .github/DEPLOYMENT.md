@@ -1,19 +1,18 @@
-# Deployment setup — state4627.btkdeals.com
+# Deployment setup — wostracker.online
 
-Deploy **only** the WOSStats tracker to `https://state4627.btkdeals.com`. Do not use these credentials or paths for other Hostinger sites.
+Deploy the WOSTracker / WOSStats site to **https://wostracker.online**
+(`domains/wostracker.online/public_html` on Hostinger).
 
-## 1. Local files (Windows)
-
-From your machine:
+## 1. Local files (optional manual deploy)
 
 ```text
-D:\ssh\ssh keys\
+ssh keys/
 ├── ssh.txt
-├── hostinger_ryan_ed25519       ← private key (never commit)
-└── hostinger_ryan_ed25519.pub   ← optional
+├── hostinger_btkdeals_ed25519       ← private key (never commit)
+└── hostinger_btkdeals_ed25519.pub   ← optional
 ```
 
-Copy `ssh.txt.example` from this repo to `ssh.txt` and fill in values from **hPanel → SSH Access**.
+Copy `ssh.txt.example` to `ssh.txt` and fill in values from **hPanel → SSH Access**.
 
 Expected `ssh.txt` format:
 
@@ -21,78 +20,69 @@ Expected `ssh.txt` format:
 Host=157.173.209.199
 User=u229715236
 Port=65002
-Path=domains/btkdeals.com/public_html/state4627
-Key=hostinger_ryan_ed25519
+Path=domains/wostracker.online/public_html
+Key=hostinger_btkdeals_ed25519
 ```
-
-If the private key is passphrase-protected, also set secret `HOSTINGER_SSH_KEY_PASSPHRASE`.
-
-Confirm the **Path** points at the `state4627` subdomain document root only.
 
 ## 2. GitHub repository secrets
 
 Repo: https://github.com/pakabbas/WOSStats
 
-Go to **Settings → Secrets and variables → Actions → New repository secret** and add:
-
 | Secret name | Value source |
 |-------------|--------------|
-| `HOSTINGER_SSH_HOST` | `Host=` line in `ssh.txt` |
-| `HOSTINGER_SSH_USER` | `User=` line in `ssh.txt` |
-| `HOSTINGER_SSH_PORT` | `Port=` line in `ssh.txt` (usually `65002`) |
-| `HOSTINGER_DEPLOY_PATH` | `Path=` line in `ssh.txt` (must contain `state4627`) |
-| `HOSTINGER_SSH_PRIVATE_KEY` | Full contents of `hostinger_ryan_ed25519` |
-| `HOSTINGER_SSH_KEY_PASSPHRASE` | Passphrase for the encrypted private key (if applicable) |
+| `HOSTINGER_SSH_PRIVATE_KEY` | Full contents of `hostinger_btkdeals_ed25519` (or the key authorized on this Hostinger account) |
+| `HOSTINGER_SSH_KEY_PASSPHRASE` | Only if the private key is encrypted |
 
-### GitHub Environment (recommended)
+Hard-coded in the workflow (no secrets needed for these):
 
-Create environment **`production-state4627`** under **Settings → Environments** and attach the same secrets there. The workflow uses this environment so production deploy credentials are scoped to state4627.
+- Host: `157.173.209.199`
+- User: `u229715236`
+- Port: `65002`
+- Path: `domains/wostracker.online/public_html`
 
-## 3. Cursor Cloud secrets (for Cloud Agents)
+## 3. Server-only config (do not commit)
 
-In your Cursor **Cloud Environment** for this repo, add the same five secrets:
+On the live server, `config.json` must exist and stay excluded from rsync.
 
-- `HOSTINGER_SSH_HOST`
-- `HOSTINGER_SSH_USER`
-- `HOSTINGER_SSH_PORT`
-- `HOSTINGER_DEPLOY_PATH`
-- `HOSTINGER_SSH_PRIVATE_KEY`
+Before the **first** auto-deploy after switching NAP password to config:
 
-Cloud agents can then run `./deploy.sh` without local `D:\` paths.
+1. Add key `nap_banned_password` to live `config.json` (same value the old hardcoded constant used).
+2. Leave `update_token`, DB, OAuth, and API keys only on the server.
+
+If `nap_banned_password` is missing/empty, NAP banned admin actions **fail closed** (deny).
 
 ## 4. Deploy methods
 
-### GitHub Actions (after secrets are set)
+### GitHub Actions
 
-- **Automatic:** push/merge to `main` (excludes markdown-only changes)
-- **Manual:** Actions → **Deploy state4627 to Hostinger** → **Run workflow**
+- **Automatic:** push/merge to `main`
+- **Manual:** Actions → **Deploy wostracker.online to Hostinger** → **Run workflow**
+
+Workflow file: `.github/workflows/deploy-wostracker.yml`
+
+Rsync **does not use `--delete`** and excludes server-only paths (`config.json`, `data/*` runtime, uploads contents, `.git`, `.github`, logs).
 
 ### Local / Cloud Agent shell
 
 ```bash
-# Option A — from ssh.txt + key file
 export SSH_DIR="/path/to/ssh keys"
 source scripts/load-hostinger-env.sh
 ./deploy.sh
-
-# Option B — from environment secrets
-export HOSTINGER_SSH_HOST=...
-export HOSTINGER_SSH_USER=...
-export HOSTINGER_SSH_PORT=65002
-export HOSTINGER_DEPLOY_PATH=/home/.../state4627.../public_html
-export HOSTINGER_SSH_PRIVATE_KEY="$(cat hostinger_ryan_ed25519)"
-./deploy.sh
 ```
 
-## 5. After first deploy
+Or set `HOSTINGER_SSH_HOST`, `HOSTINGER_SSH_USER`, `HOSTINGER_SSH_PORT`,
+`HOSTINGER_DEPLOY_PATH=domains/wostracker.online/public_html`, and
+`HOSTINGER_SSH_PRIVATE_KEY` / `HOSTINGER_SSH_KEY`.
 
-1. SSH to the server or use File Manager to read `config.json` → copy `update_token`
-2. Run first update: `https://state4627.btkdeals.com/update.php?token=YOUR_TOKEN`
-3. Configure `nap_alliances` and `api_url` in server `config.json`
-4. Optional cron (hourly): `0 * * * * curl -fsS "https://state4627.btkdeals.com/update.php?token=YOUR_TOKEN"`
+## 5. Smoke checks
+
+After deploy the workflow curls:
+
+- `https://wostracker.online/` → expect HTTP 200
+- `https://wostracker.online/players.php` → expect HTTP 200
 
 ## 6. Security checklist
 
-- Never commit `ssh.txt`, `hostinger_ryan_ed25519`, or `config.json`
+- Never commit `ssh.txt`, private keys, or `config.json`
 - Private key stays in GitHub/Cursor **secrets** only
-- Deploy path must include `state4627` (enforced in `deploy.sh` and the workflow)
+- Deploy path must include `wostracker.online` (enforced in `deploy.sh` and the workflow)

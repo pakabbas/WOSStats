@@ -16,6 +16,7 @@ try {
         echo json_encode([
             'ok' => true,
             'user' => $user,
+            'is_admin' => $user !== null && isAppAdmin($user),
             'google_client_id' => googleOAuthConfig()['client_id'],
         ]);
         exit;
@@ -23,7 +24,26 @@ try {
 
     if ($method === 'GET' && $action === 'list') {
         $me = requireAppUser();
-        echo json_encode(['ok' => true, 'users' => listAppUsers($me['id'])]);
+        echo json_encode([
+            'ok' => true,
+            'is_admin' => isAppAdmin($me),
+            'users' => listAppUsers($me['id'], isAppAdmin($me)),
+        ]);
+        exit;
+    }
+
+    if ($method === 'POST' && $action === 'rename') {
+        $me = requireAppUser();
+        $raw = file_get_contents('php://input');
+        $input = is_string($raw) ? json_decode($raw, true) : null;
+        if (!is_array($input)) {
+            $input = $_POST;
+        }
+        $result = updateAppUserDisplayName($me['id'], (string) ($input['display_name'] ?? ''));
+        if (!$result['ok']) {
+            http_response_code(400);
+        }
+        echo json_encode($result);
         exit;
     }
 

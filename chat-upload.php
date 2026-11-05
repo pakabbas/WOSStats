@@ -4,13 +4,13 @@ declare(strict_types=1);
 
 /**
  * Chat image upload (multipart or JSON base64).
- * Max 512 KB. Saved under uploads/chat/.
+ * Max 12 MB. Saved under uploads/chat/.
  */
 
 require_once __DIR__ . '/functions.php';
 
 const CHAT_UPLOADS_DIR = __DIR__ . '/uploads/chat';
-const CHAT_IMAGE_MAX_BYTES = 512 * 1024;
+const CHAT_IMAGE_MAX_BYTES = 12 * 1024 * 1024;
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
@@ -40,7 +40,7 @@ try {
         $file = $_FILES['image'];
         $error = (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE);
         if ($error === UPLOAD_ERR_INI_SIZE || $error === UPLOAD_ERR_FORM_SIZE) {
-            throw new RuntimeException('Image is too large (max 512 KB).');
+            throw new RuntimeException('Image is too large (max 12 MB).');
         }
         if ($error !== UPLOAD_ERR_OK) {
             throw new RuntimeException('Upload failed.');
@@ -51,7 +51,7 @@ try {
             throw new RuntimeException('Invalid upload.');
         }
         if ($size <= 0 || $size > CHAT_IMAGE_MAX_BYTES) {
-            throw new RuntimeException('Image must be 512 KB or smaller.');
+            throw new RuntimeException('Image must be 12 MB or smaller.');
         }
         $finfo = new finfo(FILEINFO_MIME_TYPE);
         $mime = $finfo->file($tmp) ?: '';
@@ -75,7 +75,7 @@ try {
             throw new RuntimeException('Invalid image data.');
         }
         if (strlen($binary) > CHAT_IMAGE_MAX_BYTES) {
-            throw new RuntimeException('Image must be 512 KB or smaller.');
+            throw new RuntimeException('Image must be 12 MB or smaller.');
         }
     }
 

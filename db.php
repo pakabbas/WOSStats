@@ -220,10 +220,13 @@ CREATE TABLE IF NOT EXISTS kv_store (
 CREATE TABLE IF NOT EXISTS app_users (
   id VARCHAR(64) NOT NULL PRIMARY KEY,
   email VARCHAR(191) NULL,
+  username VARCHAR(64) NULL,
+  password_hash VARCHAR(255) NULL,
   display_name VARCHAR(120) NOT NULL,
   photo_url VARCHAR(500) NULL,
   created_at DATETIME NOT NULL,
   last_seen_at DATETIME NOT NULL,
+  UNIQUE KEY uq_app_users_username (username),
   INDEX idx_app_users_email (email),
   INDEX idx_app_users_seen (last_seen_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -239,6 +242,72 @@ CREATE TABLE IF NOT EXISTS private_messages (
   INDEX idx_pm_thread (thread_id, id),
   INDEX idx_pm_from (from_user_id),
   INDEX idx_pm_to (to_user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS nap_rules (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  sort_order INT NOT NULL DEFAULT 0,
+  title VARCHAR(255) NOT NULL,
+  body TEXT NOT NULL,
+  is_published TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  INDEX idx_nap_rules_sort (sort_order, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS announcements (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  title VARCHAR(255) NOT NULL,
+  body TEXT NOT NULL,
+  is_published TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  INDEX idx_announcements_created (created_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS nap_membership (
+  alliance_key VARCHAR(64) NOT NULL PRIMARY KEY,
+  alliance_id VARCHAR(32) NULL,
+  alliance_tag VARCHAR(64) NULL,
+  alliance_name VARCHAR(191) NULL,
+  mode VARCHAR(16) NOT NULL,
+  updated_at DATETIME NOT NULL,
+  INDEX idx_nap_membership_mode (mode)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS page_visits (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  page_key VARCHAR(64) NOT NULL,
+  visitor_key VARCHAR(64) NOT NULL,
+  visited_at DATETIME NOT NULL,
+  INDEX idx_page_visits_page_at (page_key, visited_at),
+  INDEX idx_page_visits_page_visitor (page_key, visitor_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS visitor_activity (
+  visitor_key VARCHAR(64) NOT NULL PRIMARY KEY,
+  first_seen DATETIME NOT NULL,
+  last_seen DATETIME NOT NULL,
+  hit_count INT UNSIGNED NOT NULL DEFAULT 1,
+  ip_address VARCHAR(45) NULL,
+  country VARCHAR(64) NULL,
+  region VARCHAR(96) NULL,
+  city VARCHAR(96) NULL,
+  geo_label VARCHAR(191) NULL,
+  geo_looked_up_at DATETIME NULL,
+  INDEX idx_visitor_activity_last (last_seen)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS visitor_geo_cache (
+  visitor_key VARCHAR(64) NOT NULL PRIMARY KEY,
+  ip_hash VARCHAR(64) NOT NULL,
+  country VARCHAR(64) NULL,
+  region VARCHAR(96) NULL,
+  city VARCHAR(96) NULL,
+  geo_label VARCHAR(191) NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'ok',
+  looked_up_at DATETIME NOT NULL,
+  INDEX idx_visitor_geo_looked_up (looked_up_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 SQL;
 
@@ -260,6 +329,43 @@ SQL;
         }
     } catch (Throwable $e) {
         // Ignore migration errors on locked/shared hosts; enrichment still works from [TAG] names.
+    }
+
+    // Existing installs: geo columns on visitor_activity.
+    try {
+        $visitCols = $pdo->query('SHOW COLUMNS FROM visitor_activity')->fetchAll(PDO::FETCH_COLUMN);
+        $geoCols = [
+            'ip_address' => 'VARCHAR(45) NULL AFTER hit_count',
+            'country' => 'VARCHAR(64) NULL AFTER ip_address',
+            'region' => 'VARCHAR(96) NULL AFTER country',
+            'city' => 'VARCHAR(96) NULL AFTER region',
+            'geo_label' => 'VARCHAR(191) NULL AFTER city',
+            'geo_looked_up_at' => 'DATETIME NULL AFTER geo_label',
+        ];
+        foreach ($geoCols as $col => $ddl) {
+            if (!in_array($col, $visitCols, true)) {
+                $pdo->exec('ALTER TABLE visitor_activity ADD COLUMN ' . $col . ' ' . $ddl);
+            }
+        }
+    } catch (Throwable $e) {
+        // Table may not exist yet on first boot; CREATE IF NOT EXISTS covers new installs.
+    }
+
+    // Existing installs: local username/password login for app_users.
+    try {
+        $userCols = $pdo->query('SHOW COLUMNS FROM app_users')->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('username', $userCols, true)) {
+            $pdo->exec('ALTER TABLE app_users ADD COLUMN username VARCHAR(64) NULL AFTER email');
+        }
+        if (!in_array('password_hash', $userCols, true)) {
+            $pdo->exec('ALTER TABLE app_users ADD COLUMN password_hash VARCHAR(255) NULL AFTER username');
+        }
+        $idx = $pdo->query("SHOW INDEX FROM app_users WHERE Key_name = 'uq_app_users_username'")->fetchAll();
+        if ($idx === []) {
+            $pdo->exec('ALTER TABLE app_users ADD UNIQUE KEY uq_app_users_username (username)');
+        }
+    } catch (Throwable $e) {
+        // Ignore migration errors on locked/shared hosts.
     }
 }
 

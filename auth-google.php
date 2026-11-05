@@ -47,7 +47,7 @@ try {
     $user = upsertAppUserFromGoogle($google);
     loginAppUser($user);
 
-    echo json_encode(['ok' => true, 'user' => $user]);
+    echo json_encode(['ok' => true, 'user' => $user, 'is_admin' => isAppAdmin($user)]);
 } catch (Throwable $e) {
     http_response_code(400);
     echo json_encode(['ok' => false, 'error' => $e->getMessage()]);

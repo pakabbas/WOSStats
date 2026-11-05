@@ -63,38 +63,24 @@ Edit `config.json`:
 
 ## Data Source
 
-Default production sources for this project: **[WOS Atlas](https://api.wosatlas.com)**
+Default production source: the public **[WOS Atlas](https://wosatlas.com)** website API
+(`https://wosatlas.com/api/v1`, anonymous GETs, see `atlas_v2.php`). The old developer API
+(`https://api.wosatlas.com/v1/...`) is retired and returns `401 INVALID_API_KEY`; `api_key`,
+`atlas_email`, `atlas_password` and `data/atlas-cookies.txt` are no longer used.
 
-Alliances (top 20):
+Set `"data_source": "atlas_v2"` (or leave `api_url` empty / pointing at `api.wosatlas.com`).
 
-```text
-https://api.wosatlas.com/v1/alliances/leaderboard?limit=20&kid={state_id}
-```
+| Data | v2 endpoint(s) | Limit |
+|------|----------------|-------|
+| Alliances (top 20) | `/servers/{kid}/alliances` | 20 |
+| Players board | `/servers/{kid}/boards/power.rank` + `furnace.rank` + `/alliances/{aid}/members` for the top 20 alliances | 20 per list (~400 merged) |
+| Tracked roster | `/alliances/{aid}` + `/alliances/{aid}/members` | top 20 members, merged onto stored roster |
+| Player by ID | `/players/{uid}` (FID/alt_id resolved via local index) | 404 when unknown |
 
-Players (top 200 power ranking):
-
-```text
-https://api.wosatlas.com/v1/power/leaderboard?limit=200&kid={state_id}
-```
-
-Stored as JSON under `data/alliances.json`, `data/players.json`, plus history snapshots.
-
-```json
-{
-    "alliances": [
-        {
-            "id": "123456",
-            "name": "Example Alliance",
-            "tag": "ABC",
-            "rank": 1,
-            "power": 42300000000,
-            "members": 98
-        }
-    ]
-}
-```
-
-WOS Atlas uses `entries` with aliases `aid` → id, `abbr` → tag, `totalPower` → power (mapped automatically).
+Not available without a browser Turnstile session (not used): `/search?q=`, `/players/{id}/changes`,
+`/players/{id}/stats/*`, `/servers/{kid}/changes`, any `?cursor=` paging. Arena/hero data has no v2 endpoint.
+Responses are cached in `data/atlas-v2/cache/` and every seen player is indexed in
+`data/atlas-v2/player-index.json` (for FID → UID and local name search).
 
 URL placeholders:
 
@@ -130,13 +116,13 @@ On failure, existing data is **not** modified.
 Recommended: one snapshot per day. Each run saves current alliances and appends a history snapshot (kept for 90 days).
 
 ```cron
-0 6 * * * curl -fsS "https://state4627.btkdeals.com/update.php?token=YOUR_TOKEN" >/dev/null
+0 6 * * * curl -fsS "https://wostracker.online/update.php?token=YOUR_TOKEN" >/dev/null
 ```
 
 That runs daily at 06:00 server time. For more frequent charts you can also use hourly:
 
 ```cron
-0 * * * * curl -fsS "https://state4627.btkdeals.com/update.php?token=YOUR_TOKEN" >/dev/null
+0 * * * * curl -fsS "https://wostracker.online/update.php?token=YOUR_TOKEN" >/dev/null
 ```
 
 ## Comparing alliances
@@ -172,12 +158,12 @@ Open **Compare alliances** from the dashboard, or from an alliance detail page. 
 
 ## Deployment (Hostinger — State 4627)
 
-Production URL: https://state4627.btkdeals.com
+Production URL: https://wostracker.online
 
 See **[.github/DEPLOYMENT.md](.github/DEPLOYMENT.md)** for:
 
 - Mapping `D:\ssh\ssh keys\ssh.txt` + `hostinger_ryan_ed25519` to GitHub/Cursor secrets
-- GitHub Actions deploy workflow (`production-state4627` environment)
+- GitHub Actions deploy workflow (`.github/workflows/deploy-wostracker.yml`)
 - Manual `./deploy.sh` from Cloud Agents
 
 ## License

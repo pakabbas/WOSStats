@@ -26,7 +26,30 @@ const HISTORY_RETENTION_DAYS = 90;
 const TOP_ALLIANCES_LIMIT = 20;
 const TOP_PLAYERS_LIMIT = 200;
 const NAP_BANNED_FILE = DATA_DIR . '/nap-banned.json';
-const NAP_BANNED_PASSWORD = 'STATE4627';
+const SVS_OPPONENT_KID = '4642';
+const SVS_OPPONENT_CACHE_FILE = DATA_DIR . '/svs-4642.json';
+const SVS_OPPONENT_CACHE_TTL = 6 * 3600; // refresh Atlas scout data every 6h
+const SVS_ARENA_CACHE_FILE = DATA_DIR . '/svs-arena-4642.json';
+const SVS_ARENA_CACHE_TTL = 6 * 3600;
+const SVS_ARENA_SCOUT_LIMIT = 12;
+const SITE_VISITS_FILE = DATA_DIR . '/site-visits.json';
+const SITE_GEO_CACHE_FILE = DATA_DIR . '/visitor-geo-cache.json';
+/** @deprecated Use SITE_VISITS_FILE */
+const SVS_VISITS_FILE = SITE_VISITS_FILE;
+const SVS_VISIT_PAGE_KEY = 'state-4642';
+
+/** Only this Google account (from users.php / app_users) can open the admin dashboard. */
+const APP_ADMIN_EMAIL = 'pakabbas52@gmail.com';
+
+/** Local username accounts that can open the admin dashboard (manually provisioned). */
+const APP_ADMIN_USERNAMES = [
+    'disney',
+];
+
+/** Admin usernames that must not see visitor tracking. */
+const APP_ADMIN_VISITS_DENIED_USERNAMES = [
+    'disney',
+];
 
 /** Alliance IDs that keep a member roster / progress table. */
 const TRACKED_ROSTER_ALLIANCES = [
@@ -141,6 +164,65 @@ function formatPower(?int $power): string
     return (string) $power;
 }
 
+/**
+ * Atlas stove/furnace level → player-facing label.
+ * API keeps climbing past 30: +5 per Crystal tier (31–35 = C1.1–C1.5, 36–40 = C2.1–C2.5, …).
+ *
+ * @return array{raw: int, label: string, short: string, is_crystal: bool, crystal_tier: ?int, crystal_step: ?int}
+ */
+function parseFurnaceLevel(int $level): array
+{
+    if ($level <= 30) {
+        return [
+            'raw' => $level,
+            'label' => 'Furnace ' . $level,
+            'short' => 'FC' . $level,
+            'is_crystal' => false,
+            'crystal_tier' => null,
+            'crystal_step' => null,
+        ];
+    }
+
+    $past = $level - 30;
+    $tier = (int) ceil($past / 5);
+    $step = (($past - 1) % 5) + 1;
+
+    return [
+        'raw' => $level,
+        'label' => 'Crystal ' . $tier . '.' . $step,
+        'short' => 'C' . $tier . '.' . $step,
+        'is_crystal' => true,
+        'crystal_tier' => $tier,
+        'crystal_step' => $step,
+    ];
+}
+
+/** Human label for Atlas stove_lv / furnace_lv (e.g. 40 → "Crystal 2.5", 33 → "Crystal 1.3"). */
+function formatFurnaceLevel(?int $level, bool $short = false): string
+{
+    if ($level === null || $level <= 0) {
+        return '—';
+    }
+
+    $info = parseFurnaceLevel($level);
+    return $short ? $info['short'] : $info['label'];
+}
+
+/** Chart/axis label: "C2.5 (40)" for crystal, "FC30" below. */
+function formatFurnaceChartLabel(?int $level): string
+{
+    if ($level === null || $level <= 0) {
+        return '—';
+    }
+
+    $info = parseFurnaceLevel($level);
+    if ($info['is_crystal']) {
+        return $info['short'] . ' (' . $info['raw'] . ')';
+    }
+
+    return $info['short'];
+}
+
 function formatPowerChange(?int $change): string
 {
     if ($change === null) {
@@ -235,12 +317,79 @@ function allianceThreatReferenceMedian(array $alliances): ?int
 }
 
 /**
- * Threat metrics from API max/median/total/members.
+ * Per-alliance strength from the players board (top 200): sum of the 10 strongest
+ * players' power and the number of whales (>= THREAT_WHALE_MIN_POWER).
  *
- * Spike (max÷median) catches a lone megawhale. Mass (median vs state best median)
- * catches many similar top players (e.g. LUX). Combined score = √spike + mass + 0.25×depth.
+ * @return array{top10: int, whales: int, board_count: int}
+ */
+const THREAT_TOP_N = 10;
+const THREAT_WHALE_MIN_POWER = 60000000;
+
+function allianceBoardStrength(array $alliance): array
+{
+    static $byKey = null;
+    if ($byKey === null) {
+        $byKey = [];
+        try {
+            $players = loadJson(PLAYERS_FILE, []);
+        } catch (Throwable $e) {
+            $players = [];
+        }
+        $grouped = [];
+        foreach (is_array($players) ? $players : [] as $p) {
+            if (!is_array($p)) {
+                continue;
+            }
+            $power = isset($p['power']) ? (int) $p['power'] : 0;
+            if ($power <= 0) {
+                continue;
+            }
+            $aid = trim((string) ($p['alliance_id'] ?? ''));
+            $tag = trim((string) ($p['alliance_tag'] ?? '')); // case-sensitive: WaS != wAs, B2K != b2k
+            $key = $aid !== '' ? 'id:' . $aid : ($tag !== '' ? 'tag:' . $tag : null);
+            if ($key === null) {
+                continue;
+            }
+            $grouped[$key][] = $power;
+            if ($aid !== '' && $tag !== '') {
+                $grouped['tagfallback:' . $tag][] = $power;
+            }
+        }
+        foreach ($grouped as $key => $powers) {
+            rsort($powers);
+            $byKey[$key] = [
+                'top10' => array_sum(array_slice($powers, 0, THREAT_TOP_N)),
+                'whales' => count(array_filter($powers, static fn(int $v): bool => $v >= THREAT_WHALE_MIN_POWER)),
+                'board_count' => count($powers),
+            ];
+        }
+    }
+
+    $empty = ['top10' => 0, 'whales' => 0, 'board_count' => 0];
+    $id = trim((string) ($alliance['id'] ?? ''));
+    $tag = trim((string) ($alliance['tag'] ?? ''));
+    if ($id !== '' && isset($byKey['id:' . $id])) {
+        return $byKey['id:' . $id];
+    }
+    if ($tag !== '' && isset($byKey['tag:' . $tag])) {
+        return $byKey['tag:' . $tag];
+    }
+    if ($tag !== '' && isset($byKey['tagfallback:' . $tag])) {
+        return $byKey['tagfallback:' . $tag];
+    }
+
+    return $empty;
+}
+
+/**
+ * Threat metrics.
  *
- * @return array{spike: float, mass: float, depth: float, score: float}|null
+ * Ranking score = combined power of the alliance's 10 strongest players on the
+ * top-200 board (real fighting core; LUX/MaD rank above small top-heavy alliances).
+ * Whales = members on the board at >= 60M. The old lopsidedness score
+ * (√spike + mass + 0.25×depth) is kept as 'legacy_score' for information only.
+ *
+ * @return array{spike: ?float, mass: ?float, depth: ?float, legacy_score: ?float, top10: int, whales: int, board_count: int, score: float}|null
  */
 function allianceThreatMetrics(array $alliance, ?int $referenceMedian): ?array
 {
@@ -248,28 +397,35 @@ function allianceThreatMetrics(array $alliance, ?int $referenceMedian): ?array
     $median = isset($alliance['median_power']) ? (int) $alliance['median_power'] : null;
     $avg = allianceAveragePower($alliance);
 
+    $spike = null;
+    $mass = null;
+    $depth = null;
+    $legacy = null;
     if (
-        $max === null
-        || $median === null
-        || $avg === null
-        || $median <= 0
-        || $avg <= 0
-        || $referenceMedian === null
-        || $referenceMedian <= 0
+        $max !== null && $median !== null && $avg !== null
+        && $median > 0 && $avg > 0
+        && $referenceMedian !== null && $referenceMedian > 0
     ) {
-        return null;
+        $spike = $max / $median;
+        $mass = $median / $referenceMedian;
+        $depth = $median / $avg;
+        $legacy = sqrt($spike) + $mass + (0.25 * $depth);
     }
 
-    $spike = $max / $median;
-    $mass = $median / $referenceMedian;
-    $depth = $median / $avg;
-    $score = sqrt($spike) + $mass + (0.25 * $depth);
+    $strength = allianceBoardStrength($alliance);
+    if ($strength['board_count'] === 0 && $legacy === null) {
+        return null;
+    }
 
     return [
         'spike' => $spike,
         'mass' => $mass,
         'depth' => $depth,
-        'score' => $score,
+        'legacy_score' => $legacy,
+        'top10' => $strength['top10'],
+        'whales' => $strength['whales'],
+        'board_count' => $strength['board_count'],
+        'score' => (float) $strength['top10'],
     ];
 }
 
@@ -295,12 +451,24 @@ function formatThreatRatioTooltip(?array $metrics): string
         return 'Threat score unavailable';
     }
 
-    return sprintf(
-        'Spike %.2f× (max ÷ median) · Depth %.2f (median vs state) · Score %.2f×',
-        $metrics['spike'],
-        $metrics['mass'],
-        $metrics['score']
-    );
+    $parts = [
+        'Top 10 players power ' . formatPower((int) ($metrics['top10'] ?? 0)),
+        'Whales ≥60M: ' . (int) ($metrics['whales'] ?? 0),
+    ];
+
+    return implode(' · ', $parts);
+}
+
+/**
+ * Threat score display (combined power of the 10 strongest board players).
+ */
+function formatThreatScore(?float $score): string
+{
+    if ($score === null) {
+        return '—';
+    }
+
+    return formatPower((int) round($score));
 }
 
 function threatRatioClass(?float $score): string
@@ -309,15 +477,15 @@ function threatRatioClass(?float $score): string
         return '';
     }
 
-    if ($score >= 3.2) {
+    if ($score >= 800000000) {
         return 'ratio-cell-high';
     }
 
-    if ($score >= 2.5) {
+    if ($score >= 400000000) {
         return 'ratio-cell-mid';
     }
 
-    return 'ratio-cell-low';
+    return '';
 }
 
 /**
@@ -887,6 +1055,146 @@ function limitPlayersToTop(array $players, int $limit = TOP_PLAYERS_LIMIT): arra
 }
 
 /**
+ * List alliance IDs that have a saved roster JSON file.
+ *
+ * @return list<string>
+ */
+function listStoredRosterAllianceIds(): array
+{
+    if (!is_dir(ROSTERS_DIR)) {
+        return [];
+    }
+
+    $ids = [];
+    foreach (glob(ROSTERS_DIR . '/*.json') ?: [] as $file) {
+        $id = basename((string) $file, '.json');
+        if ($id !== '') {
+            $ids[] = $id;
+        }
+    }
+
+    return $ids;
+}
+
+/**
+ * Build uid → alliance map from local roster files.
+ *
+ * @return array<string, array{alliance_id: string, alliance_tag: ?string}>
+ */
+function buildPlayerAllianceLookupFromRosters(): array
+{
+    $lookup = [];
+
+    foreach (listStoredRosterAllianceIds() as $allianceId) {
+        $roster = loadAllianceRoster($allianceId);
+        $fallbackTag = trim((string) ($roster['tag'] ?? TRACKED_ROSTER_ALLIANCES[$allianceId] ?? ''));
+
+        foreach ($roster['members'] ?? [] as $member) {
+            if (!is_array($member)) {
+                continue;
+            }
+            $uid = trim((string) ($member['id'] ?? $member['uid'] ?? ''));
+            if ($uid === '') {
+                continue;
+            }
+            $tag = trim((string) ($member['abbr'] ?? $fallbackTag));
+            $lookup[$uid] = [
+                'alliance_id' => (string) $allianceId,
+                'alliance_tag' => $tag !== '' ? $tag : null,
+            ];
+        }
+    }
+
+    return $lookup;
+}
+
+/**
+ * Apply a uid → alliance map onto players (does not overwrite existing non-empty tags).
+ *
+ * @param list<array<string, mixed>> $players
+ * @param array<string, array{alliance_id?: ?string, alliance_tag?: ?string}> $lookup
+ * @return list<array<string, mixed>>
+ */
+function applyPlayerAllianceLookup(array $players, array $lookup): array
+{
+    if ($lookup === []) {
+        return $players;
+    }
+
+    foreach ($players as &$player) {
+        if (!is_array($player)) {
+            continue;
+        }
+        $id = trim((string) ($player['id'] ?? ''));
+        if ($id === '' || !isset($lookup[$id])) {
+            continue;
+        }
+
+        $info = $lookup[$id];
+        if (empty($player['alliance_tag']) && !empty($info['alliance_tag'])) {
+            $player['alliance_tag'] = (string) $info['alliance_tag'];
+        }
+        if (empty($player['alliance_id']) && !empty($info['alliance_id'])) {
+            $player['alliance_id'] = (string) $info['alliance_id'];
+        }
+    }
+    unset($player);
+
+    return $players;
+}
+
+/**
+ * Fill missing alliance_tag / alliance_id from local rosters and unique max_power matches.
+ *
+ * @param list<array<string, mixed>> $players
+ * @param list<array<string, mixed>> $alliances
+ * @param array<string, array{alliance_id?: ?string, alliance_tag?: ?string}> $extraLookup
+ * @return list<array<string, mixed>>
+ */
+function enrichPlayersWithAllianceInfo(array $players, array $alliances = [], array $extraLookup = []): array
+{
+    $lookup = buildPlayerAllianceLookupFromRosters();
+    if ($extraLookup !== []) {
+        $lookup = array_merge($lookup, $extraLookup);
+    }
+    $players = applyPlayerAllianceLookup($players, $lookup);
+
+    // Unique max_power → alliance (tags each alliance's top player when power matches).
+    $powerToAlliance = [];
+    foreach ($alliances as $alliance) {
+        if (!is_array($alliance) || !isset($alliance['max_power'])) {
+            continue;
+        }
+        $maxPower = (int) $alliance['max_power'];
+        if (isset($powerToAlliance[$maxPower])) {
+            $powerToAlliance[$maxPower] = false; // ambiguous
+            continue;
+        }
+        $powerToAlliance[$maxPower] = $alliance;
+    }
+
+    foreach ($players as &$player) {
+        if (!is_array($player) || !empty($player['alliance_tag']) || !isset($player['power'])) {
+            continue;
+        }
+        $match = $powerToAlliance[(int) $player['power']] ?? null;
+        if (!is_array($match)) {
+            continue;
+        }
+        $tag = trim((string) ($match['tag'] ?? ''));
+        if ($tag !== '') {
+            $player['alliance_tag'] = $tag;
+        }
+        if (empty($player['alliance_id']) && !empty($match['id'])) {
+            $player['alliance_id'] = (string) $match['id'];
+        }
+    }
+    unset($player);
+
+    return $players;
+}
+
+/**
  * Raise alliance max_power when the player board / roster knows a stronger member.
  *
  * @param list<array<string, mixed>> $alliances
@@ -1070,6 +1378,14 @@ function applyNeverDecreasePlayerPower(array $incoming, array $existing): array
         // Prefer keeping a known id when the incoming row matched by name only.
         if (($player['id'] ?? null) === null && !empty($prev['id'])) {
             $player['id'] = (string) $prev['id'];
+        }
+
+        // Keep known alliance fields when the leaderboard payload omits them.
+        if (empty($player['alliance_tag']) && !empty($prev['alliance_tag'])) {
+            $player['alliance_tag'] = (string) $prev['alliance_tag'];
+        }
+        if (empty($player['alliance_id']) && !empty($prev['alliance_id'])) {
+            $player['alliance_id'] = (string) $prev['alliance_id'];
         }
 
         $out[] = $player;
@@ -1479,14 +1795,34 @@ function formatJumpPct(?float $value): string
     return number_format($value, 2) . '%';
 }
 
-/** Top N alliances by rank are treated as NAP. */
-const NAP_TOP_ALLIANCES = 8;
+/** Top N alliances by rank are treated as NAP (unless admin overrides). */
+const NAP_TOP_ALLIANCES = 7;
 
 function isNapAlliance(array $alliance, array $napTags = []): bool
 {
-    $rank = isset($alliance['rank']) ? (int) $alliance['rank'] : 0;
+    $mode = napMembershipModeForAlliance($alliance);
+    if ($mode === 'exclude') {
+        return false;
+    }
+    if ($mode === 'include') {
+        return true;
+    }
 
-    return $rank >= 1 && $rank <= NAP_TOP_ALLIANCES;
+    $rank = isset($alliance['rank']) ? (int) $alliance['rank'] : 0;
+    if ($rank >= 1 && $rank <= NAP_TOP_ALLIANCES) {
+        return true;
+    }
+
+    $tag = trim((string) ($alliance['tag'] ?? ''));
+    if ($tag !== '' && $napTags !== []) {
+        foreach ($napTags as $napTag) {
+            if (trim((string) $napTag) === $tag) {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 function getLastUpdated(array $alliances): ?string
@@ -1524,11 +1860,27 @@ function h(?string $value): string
     return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
+/** Relative prefix back to site root when the current script lives in a subfolder (e.g. admin/). */
+function webRootPrefix(): string
+{
+    $script = str_replace('\\', '/', (string) ($_SERVER['SCRIPT_NAME'] ?? ''));
+    $dir = str_replace('\\', '/', dirname($script));
+    if ($dir === '/' || $dir === '\\' || $dir === '.' || $dir === '') {
+        return '';
+    }
+    $segments = array_values(array_filter(explode('/', trim($dir, '/')), static fn(string $s): bool => $s !== ''));
+    if ($segments === []) {
+        return '';
+    }
+
+    return str_repeat('../', count($segments));
+}
+
 function assetUrl(string $path): string
 {
     $fullPath = __DIR__ . '/' . ltrim($path, '/');
     $version = is_file($fullPath) ? (string) filemtime($fullPath) : (string) time();
-    return h($path) . '?v=' . h($version);
+    return h(webRootPrefix() . ltrim($path, '/')) . '?v=' . h($version);
 }
 
 /** Favicon + theme icons for every page head. */
@@ -1556,6 +1908,25 @@ function limitAlliancesToTop(array $alliances, int $limit = TOP_ALLIANCES_LIMIT)
     return $top;
 }
 
+function renderWhatsAppIconLink(string $extraClass = ''): void
+{
+    $class = trim('wa-icon-link ' . $extraClass);
+    ?>
+    <a
+        class="<?= h($class) ?>"
+        href="https://wa.me/923052848987"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="WhatsApp Abbas"
+        aria-label="WhatsApp Abbas"
+    >
+        <svg class="wa-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M17.47 14.38c-.3-.15-1.77-.87-2.04-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.95 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.48-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.13-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.61-.92-2.2-.24-.58-.5-.5-.67-.5h-.57c-.2 0-.52.07-.8.37-.27.3-1.05 1.02-1.05 2.5s1.08 2.9 1.23 3.1c.15.2 2.12 3.24 5.14 4.54.72.31 1.28.5 1.72.64.72.23 1.38.2 1.9.12.58-.09 1.77-.72 2.02-1.42.25-.7.25-1.3.17-1.42-.07-.12-.27-.2-.57-.35ZM12.04 2C6.5 2 2 6.5 2 12.04c0 1.78.47 3.5 1.36 5.02L2 22l5.07-1.33A10 10 0 0 0 12.04 22C17.55 22 22 17.55 22 12.04 22 6.5 17.55 2 12.04 2Z"/>
+        </svg>
+    </a>
+    <?php
+}
+
 function renderSiteFooter(): void
 {
     ?>
@@ -1563,7 +1934,7 @@ function renderSiteFooter(): void
         <p>
             System Developed by <strong>Abbas</strong> (Ben D0ver from AOC)
             ·
-            <a href="https://wa.me/923052848987" target="_blank" rel="noopener noreferrer">WhatsApp</a>
+            <?php renderWhatsAppIconLink(); ?>
         </p>
     </footer>
     <?php
@@ -1572,13 +1943,24 @@ function renderSiteFooter(): void
 /**
  * Shared top navigation. Live Chat and Report open in a new tab.
  *
- * @param 'alliances'|'players'|'compare'|'threat'|'alliance'|'chat'|'incidents'|'nap-banned'|'users'|null $active
+ * @param 'alliances'|'players'|'compare'|'threat'|'alliance'|'chat'|'incidents'|'nap-banned'|'users'|'nap-rules'|'announcements'|'admin'|null $active
  */
 function renderSiteNav(?string $active = null): void
 {
+    // Silent site-wide analytics (admin-only reporting). Never break page render.
+    try {
+        recordSiteVisit();
+    } catch (Throwable $e) {
+        // ignore
+    }
+
+    $showAdmin = isAppAdmin();
+    $base = webRootPrefix();
+    $fabAccountHref = $showAdmin ? ($base . 'admin/') : ($base . 'users.php');
+    $fabAccountLabel = $showAdmin ? 'Admin' : 'Sign In';
     ?>
     <nav class="site-nav" aria-label="Primary">
-        <a class="site-brand" href="index.php">
+        <a class="site-brand" href="<?= h($base) ?>index.php">
             <span class="site-brand-mark">4627</span>
             <span class="site-brand-text">
                 <strong>State Tracker</strong>
@@ -1587,41 +1969,69 @@ function renderSiteNav(?string $active = null): void
         </a>
 
         <div class="site-nav-primary" aria-label="Quick links">
-            <a class="nav-link <?= $active === 'alliances' || $active === 'alliance' ? 'is-active' : '' ?>" href="index.php">Alliances</a>
-            <a class="nav-link <?= $active === 'players' ? 'is-active' : '' ?>" href="players.php">Players</a>
+            <a class="nav-link <?= $active === 'alliances' || $active === 'alliance' ? 'is-active' : '' ?>" href="<?= h($base) ?>index.php">Alliances</a>
+            <a class="nav-link <?= $active === 'players' ? 'is-active' : '' ?>" href="<?= h($base) ?>players.php">Players</a>
+            <a class="nav-link nav-link-svs <?= $active === 'svs-4642' ? 'is-active' : '' ?>" href="<?= h($base) ?>state-4642.php">SvS 4642</a>
             <a
                 class="nav-link nav-link-chat <?= $active === 'chat' ? 'is-active' : '' ?>"
-                href="chat.php"
+                href="<?= h($base) ?>chat.php"
                 target="_blank"
                 rel="noopener noreferrer"
             >Live Chat</a>
             <a
                 class="nav-link nav-link-report <?= $active === 'incidents' ? 'is-active' : '' ?>"
-                href="incidents.php"
+                href="<?= h($base) ?>incidents.php"
                 target="_blank"
                 rel="noopener noreferrer"
             >Report</a>
         </div>
 
         <div class="site-nav-links site-nav-desktop" aria-label="Desktop links">
-            <a class="nav-link <?= $active === 'alliances' || $active === 'alliance' ? 'is-active' : '' ?>" href="index.php">Alliances</a>
-            <a class="nav-link <?= $active === 'players' ? 'is-active' : '' ?>" href="players.php">Players</a>
-            <a class="nav-link <?= $active === 'compare' ? 'is-active' : '' ?>" href="compare.php">Compare</a>
-            <a class="nav-link <?= $active === 'threat' ? 'is-active' : '' ?>" href="threat-board.php">Threat Metric</a>
+            <?php if ($showAdmin): ?>
+                <a class="nav-link nav-link-admin-btn <?= $active === 'admin' ? 'is-active' : '' ?>" href="<?= h($base) ?>admin/">Admin</a>
+            <?php endif; ?>
+            <a class="nav-link <?= $active === 'alliances' || $active === 'alliance' ? 'is-active' : '' ?>" href="<?= h($base) ?>index.php">Alliances</a>
+            <a class="nav-link <?= $active === 'players' ? 'is-active' : '' ?>" href="<?= h($base) ?>players.php">Players</a>
+            <a class="nav-link <?= $active === 'nap-rules' ? 'is-active' : '' ?>" href="<?= h($base) ?>nap-rules.php">Rules</a>
+            <a class="nav-link <?= $active === 'announcements' ? 'is-active' : '' ?>" href="<?= h($base) ?>announcements.php">Announcements</a>
+            <a class="nav-link nav-link-svs <?= $active === 'svs-4642' ? 'is-active' : '' ?>" href="<?= h($base) ?>state-4642.php">SvS 4642</a>
+            <div class="nav-more <?= ($active === 'compare' || $active === 'threat' || $active === 'svs-4642') ? 'has-active' : '' ?>">
+                <button
+                    type="button"
+                    class="nav-link nav-more-toggle <?= ($active === 'compare' || $active === 'threat') ? 'is-active' : '' ?>"
+                    id="nav-more-toggle"
+                    aria-expanded="false"
+                    aria-controls="nav-more-menu"
+                >More</button>
+                <div class="nav-more-menu" id="nav-more-menu" hidden>
+                    <a class="nav-more-item <?= $active === 'compare' ? 'is-active' : '' ?>" href="<?= h($base) ?>compare.php">Compare</a>
+                    <a class="nav-more-item <?= $active === 'threat' ? 'is-active' : '' ?>" href="<?= h($base) ?>threat-board.php">Threat Metric</a>
+                    <a class="nav-more-item <?= $active === 'svs-4642' ? 'is-active' : '' ?>" href="<?= h($base) ?>state-4642.php">State 4642</a>
+                </div>
+            </div>
             <a
                 class="nav-link nav-link-chat <?= $active === 'chat' ? 'is-active' : '' ?>"
-                href="chat.php"
+                href="<?= h($base) ?>chat.php"
                 target="_blank"
                 rel="noopener noreferrer"
             >Live Chat</a>
-            <a class="nav-link <?= $active === 'users' ? 'is-active' : '' ?>" href="users.php">Users</a>
             <a
                 class="nav-link nav-link-report <?= $active === 'incidents' ? 'is-active' : '' ?>"
-                href="incidents.php"
+                href="<?= h($base) ?>incidents.php"
                 target="_blank"
                 rel="noopener noreferrer"
             >Report</a>
-            <a class="nav-link nav-link-nap-banned <?= $active === 'nap-banned' ? 'is-active' : '' ?>" href="nap-banned.php">NAP Banned</a>
+            <a class="nav-link nav-link-nap-banned <?= $active === 'nap-banned' ? 'is-active' : '' ?>" href="<?= h($base) ?>nap-banned.php">NAP Banned</a>
+            <a
+                class="nav-link nav-link-admin-icon <?= $active === 'users' ? 'is-active' : '' ?>"
+                href="<?= h($base) ?>users.php"
+                title="Users"
+                aria-label="Users"
+            >
+                <svg class="nav-admin-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+                    <path fill="currentColor" d="M12 12a4.5 4.5 0 1 0-4.5-4.5A4.5 4.5 0 0 0 12 12Zm0 2.25c-3.6 0-6.75 1.8-6.75 4.05V20h13.5v-1.7c0-2.25-3.15-4.05-6.75-4.05Z"/>
+                </svg>
+            </a>
         </div>
 
         <button
@@ -1647,18 +2057,66 @@ function renderSiteNav(?string $active = null): void
                 <button type="button" class="incident-modal-close" data-nav-close aria-label="Close menu">&times;</button>
             </header>
             <nav class="nav-drawer-links" aria-label="All pages">
-                <a class="nav-drawer-link <?= $active === 'alliances' || $active === 'alliance' ? 'is-active' : '' ?>" href="index.php">Alliances</a>
-                <a class="nav-drawer-link <?= $active === 'players' ? 'is-active' : '' ?>" href="players.php">Players</a>
-                <a class="nav-drawer-link <?= $active === 'compare' ? 'is-active' : '' ?>" href="compare.php">Compare</a>
-                <a class="nav-drawer-link <?= $active === 'threat' ? 'is-active' : '' ?>" href="threat-board.php">Threat Metric</a>
-                <a class="nav-drawer-link <?= $active === 'chat' ? 'is-active' : '' ?>" href="chat.php" target="_blank" rel="noopener noreferrer">Live Chat</a>
-                <a class="nav-drawer-link <?= $active === 'users' ? 'is-active' : '' ?>" href="users.php">Users</a>
-                <a class="nav-drawer-link <?= $active === 'incidents' ? 'is-active' : '' ?>" href="incidents.php" target="_blank" rel="noopener noreferrer">Report</a>
-                <a class="nav-drawer-link nav-drawer-link-banned <?= $active === 'nap-banned' ? 'is-active' : '' ?>" href="nap-banned.php">NAP Banned</a>
+                <?php if ($showAdmin): ?>
+                    <a class="nav-drawer-link nav-drawer-link-admin <?= $active === 'admin' ? 'is-active' : '' ?>" href="<?= h($base) ?>admin/">Admin</a>
+                <?php endif; ?>
+                <a class="nav-drawer-link <?= $active === 'alliances' || $active === 'alliance' ? 'is-active' : '' ?>" href="<?= h($base) ?>index.php">Alliances</a>
+                <a class="nav-drawer-link <?= $active === 'players' ? 'is-active' : '' ?>" href="<?= h($base) ?>players.php">Players</a>
+                <a class="nav-drawer-link <?= $active === 'nap-rules' ? 'is-active' : '' ?>" href="<?= h($base) ?>nap-rules.php">Rules</a>
+                <a class="nav-drawer-link <?= $active === 'announcements' ? 'is-active' : '' ?>" href="<?= h($base) ?>announcements.php">Announcements</a>
+                <p class="nav-drawer-section">More</p>
+                <a class="nav-drawer-link <?= $active === 'svs-4642' ? 'is-active' : '' ?>" href="<?= h($base) ?>state-4642.php">State 4642 · SvS</a>
+                <a class="nav-drawer-link <?= $active === 'compare' ? 'is-active' : '' ?>" href="<?= h($base) ?>compare.php">Compare</a>
+                <a class="nav-drawer-link <?= $active === 'threat' ? 'is-active' : '' ?>" href="<?= h($base) ?>threat-board.php">Threat Metric</a>
+                <a class="nav-drawer-link <?= $active === 'chat' ? 'is-active' : '' ?>" href="<?= h($base) ?>chat.php" target="_blank" rel="noopener noreferrer">Live Chat</a>
+                <a class="nav-drawer-link <?= $active === 'incidents' ? 'is-active' : '' ?>" href="<?= h($base) ?>incidents.php" target="_blank" rel="noopener noreferrer">Report</a>
+                <a class="nav-drawer-link nav-drawer-link-banned <?= $active === 'nap-banned' ? 'is-active' : '' ?>" href="<?= h($base) ?>nap-banned.php">NAP Banned</a>
+                <a class="nav-drawer-link <?= $active === 'users' ? 'is-active' : '' ?>" href="<?= h($base) ?>users.php">Users</a>
             </nav>
         </aside>
     </div>
     <script src="<?= assetUrl('assets/nav.js') ?>" defer></script>
+
+    <?php if ($active !== 'chat'): ?>
+    <div class="mobile-fab" id="mobile-fab">
+        <div class="mobile-fab-backdrop" data-fab-close tabindex="-1"></div>
+        <div class="mobile-fab-actions" id="mobile-fab-actions">
+            <a class="mobile-fab-action" href="<?= h($base) ?>nap-rules.php" style="--fab-i: 3">
+                <span class="mobile-fab-label">NAP Rules</span>
+                <span class="mobile-fab-circle mobile-fab-circle-rules" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M7 3h10a2 2 0 0 1 2 2v16l-7-3-7 3V5a2 2 0 0 1 2-2Zm2 4v2h6V7H9Zm0 4v2h6v-2H9Zm0 4v2h4v-2H9Z"/></svg>
+                </span>
+            </a>
+            <a class="mobile-fab-action" href="<?= h($base) ?>announcements.php" style="--fab-i: 2">
+                <span class="mobile-fab-label">Announcements</span>
+                <span class="mobile-fab-circle mobile-fab-circle-ann" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 5h12v10H6l-2 2V5Zm14-1h2v16h-2V4ZM6 17h10v2H6v-2Z"/></svg>
+                </span>
+            </a>
+            <a class="mobile-fab-action" href="<?= h($fabAccountHref) ?>" style="--fab-i: 1">
+                <span class="mobile-fab-label"><?= h($fabAccountLabel) ?></span>
+                <span class="mobile-fab-circle mobile-fab-circle-auth" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 12a4.5 4.5 0 1 0-4.5-4.5A4.5 4.5 0 0 0 12 12Zm0 2.25c-3.6 0-6.75 1.8-6.75 4.05V20h13.5v-1.7c0-2.25-3.15-4.05-6.75-4.05Z"/></svg>
+                </span>
+            </a>
+        </div>
+        <button
+            type="button"
+            class="mobile-fab-main"
+            id="mobile-fab-toggle"
+            aria-expanded="false"
+            aria-controls="mobile-fab-actions"
+            aria-label="Open quick options"
+        >
+            <svg class="mobile-fab-icon mobile-fab-icon-menu" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false">
+                <path fill="currentColor" d="M4 7.5A1.5 1.5 0 0 1 5.5 6h13a1.5 1.5 0 0 1 0 3h-13A1.5 1.5 0 0 1 4 7.5Zm0 4.5A1.5 1.5 0 0 1 5.5 10.5h13a1.5 1.5 0 0 1 0 3h-13A1.5 1.5 0 0 1 4 12Zm0 4.5A1.5 1.5 0 0 1 5.5 15h13a1.5 1.5 0 0 1 0 3h-13A1.5 1.5 0 0 1 4 16.5Z"/>
+            </svg>
+            <svg class="mobile-fab-icon mobile-fab-icon-close" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false">
+                <path fill="currentColor" d="M6.7 6.7a1 1 0 0 1 1.4 0L12 10.6l3.9-3.9a1 1 0 1 1 1.4 1.4L13.4 12l3.9 3.9a1 1 0 1 1-1.4 1.4L12 13.4l-3.9 3.9a1 1 0 0 1-1.4-1.4L10.6 12 6.7 8.1a1 1 0 0 1 0-1.4Z"/>
+            </svg>
+        </button>
+    </div>
+    <?php endif; ?>
 
     <div class="welcome-modal" id="welcome-modal" hidden role="dialog" aria-modal="true" aria-labelledby="welcome-title">
         <div class="welcome-modal-backdrop" data-welcome-dismiss tabindex="-1"></div>
@@ -1716,12 +2174,6 @@ function renderSiteNav(?string $active = null): void
             </div>
 
             <div class="welcome-actions">
-                <a
-                    class="btn-whatsapp"
-                    href="https://wa.me/923052848987"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                >WhatsApp Abbas</a>
                 <button type="button" class="btn-primary" data-welcome-dismiss>Got it — let's go</button>
             </div>
         </div>
@@ -1766,6 +2218,27 @@ function ensureDataFilesExist(): void
         if (!file_exists(NAP_BANNED_FILE)) {
             saveJson(NAP_BANNED_FILE, []);
         }
+        if (!file_exists(SITE_VISITS_FILE)) {
+            saveJson(SITE_VISITS_FILE, ['pages' => [], 'visitors' => []]);
+        }
+    }
+
+    if (!file_exists(SITE_VISITS_FILE)) {
+        // Prefer migrating older SvS-only JSON if present.
+        $legacy = DATA_DIR . '/svs-visits.json';
+        if (is_file($legacy)) {
+            $legacyData = loadJson($legacy, ['pages' => []]);
+            if (!isset($legacyData['visitors']) || !is_array($legacyData['visitors'])) {
+                $legacyData['visitors'] = [];
+            }
+            saveJson(SITE_VISITS_FILE, $legacyData);
+        } else {
+            saveJson(SITE_VISITS_FILE, ['pages' => [], 'visitors' => []]);
+        }
+    }
+
+    if (!file_exists(SITE_GEO_CACHE_FILE) && !dbAvailable()) {
+        saveJson(SITE_GEO_CACHE_FILE, ['entries' => []]);
     }
 
     if (!is_dir(INCIDENT_UPLOADS_DIR) && !mkdir(INCIDENT_UPLOADS_DIR, 0755, true) && !is_dir(INCIDENT_UPLOADS_DIR)) {
@@ -2366,20 +2839,255 @@ function loadNapBannedPlayers(): array
     return $clean;
 }
 
+/**
+ * Find a NAP-banned entry by player UID / FID and/or name.
+ * Ban list entries may store either Atlas uid or fid.
+ *
+ * @param string|list<string>|null $playerIds
+ * @return array<string, mixed>|null
+ */
+function findNapBannedPlayer(string|array|null $playerIds = null, ?string $playerName = null): ?array
+{
+    $ids = [];
+    if (is_array($playerIds)) {
+        foreach ($playerIds as $id) {
+            $clean = preg_replace('/\D+/', '', (string) $id) ?? '';
+            if ($clean !== '') {
+                $ids[$clean] = true;
+            }
+        }
+    } else {
+        $clean = preg_replace('/\D+/', '', (string) $playerIds) ?? '';
+        if ($clean !== '') {
+            $ids[$clean] = true;
+        }
+    }
+
+    $playerName = trim((string) $playerName);
+    $nameKey = $playerName !== '' ? mb_strtolower($playerName) : '';
+
+    foreach (loadNapBannedPlayers() as $entry) {
+        if (!is_array($entry)) {
+            continue;
+        }
+        $entryId = preg_replace('/\D+/', '', (string) ($entry['player_id'] ?? '')) ?? '';
+        if ($entryId !== '' && isset($ids[$entryId])) {
+            return $entry;
+        }
+        $entryName = trim((string) ($entry['name'] ?? ''));
+        if ($nameKey !== '' && $entryName !== '' && mb_strtolower($entryName) === $nameKey) {
+            return $entry;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Resolve alliance display name from local alliances board by id or tag.
+ */
+function resolveAllianceName(?string $allianceId = null, ?string $allianceTag = null): ?string
+{
+    $allianceId = trim((string) $allianceId);
+    $allianceTag = trim((string) $allianceTag);
+    if ($allianceId === '' && $allianceTag === '') {
+        return null;
+    }
+
+    $alliances = loadJson(ALLIANCES_FILE, []);
+    if (!is_array($alliances)) {
+        return null;
+    }
+
+    foreach ($alliances as $alliance) {
+        if (!is_array($alliance)) {
+            continue;
+        }
+        $id = trim((string) ($alliance['id'] ?? ''));
+        $tag = trim((string) ($alliance['tag'] ?? ''));
+        if ($allianceId !== '' && $id !== '' && $id === $allianceId) {
+            $name = trim((string) ($alliance['name'] ?? ''));
+            return $name !== '' ? $name : ($tag !== '' ? $tag : null);
+        }
+        if ($allianceTag !== '' && $tag !== '' && strcasecmp($tag, $allianceTag) === 0) {
+            $name = trim((string) ($alliance['name'] ?? ''));
+            return $name !== '' ? $name : $tag;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Password for NAP banned admin actions from config.json key
+ * "nap_banned_password". Empty/missing => fail closed (deny).
+ */
+function napBannedPassword(): string
+{
+    try {
+        $config = loadConfig();
+    } catch (Throwable $e) {
+        return '';
+    }
+
+    return trim((string) ($config['nap_banned_password'] ?? ''));
+}
+
 function verifyNapBannedPassword(string $password): bool
 {
-    return hash_equals(NAP_BANNED_PASSWORD, $password);
+    $expected = napBannedPassword();
+    if ($expected === '') {
+        return false; // fail closed when unset
+    }
+
+    return hash_equals($expected, $password);
+}
+
+/**
+ * Refresh current alliance + coordinates for NAP-banned players (max once/day).
+ * Saves live fields onto each nap-banned entry when Atlas lookup succeeds.
+ *
+ * @param list<array<string, mixed>> $list
+ * @return array{
+ *   list: list<array<string, mixed>>,
+ *   refreshed: int,
+ *   cached: int,
+ *   failed: int,
+ *   skipped: int
+ * }
+ */
+function enrichNapBannedPlayersLiveInfo(array $list, array $config, int $ttlSeconds = 86400): array
+{
+    require_once __DIR__ . '/player-lookup.php';
+
+    $now = time();
+    $refreshed = 0;
+    $cached = 0;
+    $failed = 0;
+    $skipped = 0;
+    $changed = false;
+
+    foreach ($list as &$entry) {
+        if (!is_array($entry)) {
+            continue;
+        }
+
+        $playerId = preg_replace('/\D+/', '', (string) ($entry['player_id'] ?? '')) ?? '';
+        if ($playerId === '') {
+            $skipped++;
+            continue;
+        }
+
+        $fetchedAt = isset($entry['live_fetched_at']) ? strtotime((string) $entry['live_fetched_at']) : false;
+        // live_detail_v=2 includes /v1/players/{uid} players[] coord merge.
+        $fresh = $fetchedAt !== false
+            && ($now - $fetchedAt) < $ttlSeconds
+            && !empty($entry['live_detail'])
+            && (int) ($entry['live_detail_v'] ?? 0) >= 2
+            && (
+                array_key_exists('alliance_tag', $entry)
+                || array_key_exists('x', $entry)
+                || array_key_exists('y', $entry)
+            );
+
+        if ($fresh) {
+            $cached++;
+            // Keep alliance_name in sync with local alliances board when possible.
+            if (empty($entry['alliance_name'])) {
+                $resolved = resolveAllianceName(
+                    isset($entry['alliance_id']) ? (string) $entry['alliance_id'] : null,
+                    isset($entry['alliance_tag']) ? (string) $entry['alliance_tag'] : null
+                );
+                if ($resolved !== null) {
+                    $entry['alliance_name'] = $resolved;
+                    $changed = true;
+                }
+            }
+            continue;
+        }
+
+        try {
+            $live = lookupPlayerByUid($playerId, $config);
+            if (!is_array($live)) {
+                $failed++;
+                continue;
+            }
+            $live = enrichPlayerLookupWithLocalData($live);
+
+            // If search resolved a different Atlas uid (FID → uid), detail-fetch that uid too.
+            $resolvedUid = trim((string) ($live['id'] ?? ''));
+            if ($resolvedUid !== '' && $resolvedUid !== $playerId) {
+                $detailOnly = lookupPlayerByUid($resolvedUid, $config);
+                if (is_array($detailOnly)) {
+                    foreach (['x', 'y', 'alliance_id', 'alliance_tag', 'power', 'stove_lv', 'name', 'fid', 'kid', 'lv'] as $key) {
+                        if (($detailOnly[$key] ?? null) !== null && $detailOnly[$key] !== '') {
+                            $live[$key] = $detailOnly[$key];
+                        }
+                    }
+                    if (($live['x'] ?? null) !== null && ($live['y'] ?? null) !== null) {
+                        $live['coord_source'] = $detailOnly['coord_source'] ?? 'atlas';
+                    }
+                }
+            }
+
+            $live = enrichPlayerLookupWithLocalData($live);
+
+            $tag = trim((string) ($live['alliance_tag'] ?? ''));
+            $aid = trim((string) ($live['alliance_id'] ?? ''));
+            $allianceName = resolveAllianceName(
+                $aid !== '' ? $aid : null,
+                $tag !== '' ? $tag : null
+            );
+
+            $entry['live_uid'] = isset($live['id']) && $live['id'] !== '' ? (string) $live['id'] : null;
+            $entry['live_fid'] = isset($live['fid']) && $live['fid'] !== '' ? (string) $live['fid'] : null;
+            $entry['live_name'] = isset($live['name']) && $live['name'] !== '' ? (string) $live['name'] : null;
+            $entry['alliance_id'] = $aid !== '' ? $aid : null;
+            $entry['alliance_tag'] = $tag !== '' ? $tag : null;
+            $entry['alliance_name'] = $allianceName;
+            $entry['x'] = isset($live['x']) ? (int) $live['x'] : null;
+            $entry['y'] = isset($live['y']) ? (int) $live['y'] : null;
+            $entry['live_fetched_at'] = nowUtc();
+            $entry['live_detail'] = true;
+            // Bump so older incomplete caches re-fetch once after coord-fix deploys.
+            $entry['live_detail_v'] = 2;
+            // If the ban entry had no name, fill from live lookup.
+            if (empty($entry['name']) && !empty($live['name'])) {
+                $entry['name'] = (string) $live['name'];
+            }
+
+            $changed = true;
+            $refreshed++;
+        } catch (Throwable $e) {
+            $failed++;
+        }
+    }
+    unset($entry);
+
+    if ($changed) {
+        saveJson(NAP_BANNED_FILE, array_values($list));
+    }
+
+    return [
+        'list' => array_values($list),
+        'refreshed' => $refreshed,
+        'cached' => $cached,
+        'failed' => $failed,
+        'skipped' => $skipped,
+    ];
 }
 
 /**
  * @param array<string, mixed> $input
  * @return array{ok: bool, error?: string, entry?: array<string, mixed>}
  */
-function addNapBannedPlayer(array $input): array
+function addNapBannedPlayer(array $input, bool $skipPassword = false): array
 {
-    $password = (string) ($input['password'] ?? '');
-    if (!verifyNapBannedPassword($password)) {
-        return ['ok' => false, 'error' => 'Wrong password.'];
+    if (!$skipPassword) {
+        $password = (string) ($input['password'] ?? '');
+        if (!verifyNapBannedPassword($password)) {
+            return ['ok' => false, 'error' => 'Wrong password.'];
+        }
     }
 
     $name = trim((string) ($input['name'] ?? ''));
@@ -2446,9 +3154,9 @@ function addNapBannedPlayer(array $input): array
 /**
  * @return array{ok: bool, error?: string}
  */
-function removeNapBannedPlayer(string $entryId, string $password): array
+function removeNapBannedPlayer(string $entryId, string $password = '', bool $skipPassword = false): array
 {
-    if (!verifyNapBannedPassword($password)) {
+    if (!$skipPassword && !verifyNapBannedPassword($password)) {
         return ['ok' => false, 'error' => 'Wrong password.'];
     }
 
@@ -2473,6 +3181,375 @@ function removeNapBannedPlayer(string $entryId, string $password): array
     }
 
     saveJson(NAP_BANNED_FILE, array_values($next));
+
+    return ['ok' => true];
+}
+
+function isAppAdmin(?array $user = null): bool
+{
+    if ($user === null) {
+        $user = currentAppUser();
+    }
+    if ($user === null) {
+        return false;
+    }
+    $email = strtolower(trim((string) ($user['email'] ?? '')));
+    if ($email !== '' && $email === strtolower(APP_ADMIN_EMAIL)) {
+        return true;
+    }
+
+    $username = normalizeAppUsername((string) ($user['username'] ?? ''));
+    if ($username === '') {
+        return false;
+    }
+
+    foreach (APP_ADMIN_USERNAMES as $adminUsername) {
+        if ($username === normalizeAppUsername((string) $adminUsername)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/** Whether this admin may open the visitor tracking page. */
+function canViewVisitorTracking(?array $user = null): bool
+{
+    if ($user === null) {
+        $user = currentAppUser();
+    }
+    if ($user === null || !isAppAdmin($user)) {
+        return false;
+    }
+
+    $username = normalizeAppUsername((string) ($user['username'] ?? ''));
+    if ($username === '') {
+        return true;
+    }
+
+    foreach (APP_ADMIN_VISITS_DENIED_USERNAMES as $denied) {
+        if ($username === normalizeAppUsername((string) $denied)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * @return array{id: string, email: ?string, display_name: string, photo_url: ?string}
+ */
+function requireAppAdminPage(): array
+{
+    $user = currentAppUser();
+    if ($user === null) {
+        return [];
+    }
+    if (!isAppAdmin($user)) {
+        http_response_code(403);
+    }
+
+    return $user;
+}
+
+/**
+ * @return list<array{alliance_key: string, alliance_id: ?string, alliance_tag: ?string, alliance_name: ?string, mode: string, updated_at: string}>
+ */
+function loadNapMembershipOverrides(): array
+{
+    if (!dbAvailable()) {
+        return [];
+    }
+    dbEnsureSchema();
+    $rows = db()->query(
+        'SELECT alliance_key, alliance_id, alliance_tag, alliance_name, mode, updated_at
+         FROM nap_membership ORDER BY alliance_tag ASC, alliance_key ASC'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    $out = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $mode = strtolower(trim((string) ($row['mode'] ?? '')));
+        if ($mode !== 'include' && $mode !== 'exclude') {
+            continue;
+        }
+        $out[] = [
+            'alliance_key' => (string) $row['alliance_key'],
+            'alliance_id' => $row['alliance_id'] !== null ? (string) $row['alliance_id'] : null,
+            'alliance_tag' => $row['alliance_tag'] !== null ? (string) $row['alliance_tag'] : null,
+            'alliance_name' => $row['alliance_name'] !== null ? (string) $row['alliance_name'] : null,
+            'mode' => $mode,
+            'updated_at' => (string) ($row['updated_at'] ?? ''),
+        ];
+    }
+
+    return $out;
+}
+
+function napMembershipModeForAlliance(array $alliance): ?string
+{
+    $id = trim((string) ($alliance['id'] ?? ''));
+    $tag = trim((string) ($alliance['tag'] ?? ''));
+    $key = trim(allianceKey($alliance));
+
+    // Prefer exact alliance id (unique). Tags like WaS vs wAs must stay case-sensitive.
+    foreach (loadNapMembershipOverrides() as $row) {
+        $rowId = trim((string) ($row['alliance_id'] ?? ''));
+        $rowKey = trim((string) ($row['alliance_key'] ?? ''));
+        if ($id !== '' && ($rowId === $id || $rowKey === $id)) {
+            return $row['mode'];
+        }
+        if ($key !== '' && $rowKey === $key) {
+            return $row['mode'];
+        }
+    }
+
+    foreach (loadNapMembershipOverrides() as $row) {
+        $rowTag = trim((string) ($row['alliance_tag'] ?? ''));
+        if ($tag !== '' && $rowTag !== '' && $rowTag === $tag) {
+            return $row['mode'];
+        }
+    }
+
+    return null;
+}
+
+/**
+ * @return array{ok: bool, error?: string}
+ */
+function setNapMembershipOverride(array $alliance, string $mode): array
+{
+    $mode = strtolower(trim($mode));
+    if ($mode !== 'include' && $mode !== 'exclude') {
+        return ['ok' => false, 'error' => 'Mode must be include or exclude.'];
+    }
+    if (!dbAvailable()) {
+        return ['ok' => false, 'error' => 'Database unavailable.'];
+    }
+    dbEnsureSchema();
+
+    $key = allianceKey($alliance);
+    if ($key === '') {
+        return ['ok' => false, 'error' => 'Alliance key missing.'];
+    }
+
+    $stmt = db()->prepare(
+        'INSERT INTO nap_membership (alliance_key, alliance_id, alliance_tag, alliance_name, mode, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           alliance_id = VALUES(alliance_id),
+           alliance_tag = VALUES(alliance_tag),
+           alliance_name = VALUES(alliance_name),
+           mode = VALUES(mode),
+           updated_at = VALUES(updated_at)'
+    );
+    $stmt->execute([
+        $key,
+        isset($alliance['id']) ? (string) $alliance['id'] : null,
+        isset($alliance['tag']) ? (string) $alliance['tag'] : null,
+        isset($alliance['name']) ? (string) $alliance['name'] : null,
+        $mode,
+        gmdate('Y-m-d H:i:s'),
+    ]);
+
+    return ['ok' => true];
+}
+
+/**
+ * @return array{ok: bool, error?: string}
+ */
+function clearNapMembershipOverride(string $allianceKey): array
+{
+    $allianceKey = trim($allianceKey);
+    if ($allianceKey === '') {
+        return ['ok' => false, 'error' => 'Alliance key required.'];
+    }
+    if (!dbAvailable()) {
+        return ['ok' => false, 'error' => 'Database unavailable.'];
+    }
+    dbEnsureSchema();
+    $stmt = db()->prepare('DELETE FROM nap_membership WHERE alliance_key = ?');
+    $stmt->execute([$allianceKey]);
+
+    return ['ok' => true];
+}
+
+/**
+ * @return list<array{id: int, sort_order: int, title: string, body: string, is_published: bool, created_at: string, updated_at: string}>
+ */
+function loadNapRules(bool $publishedOnly = false): array
+{
+    if (!dbAvailable()) {
+        return [];
+    }
+    dbEnsureSchema();
+    $sql = 'SELECT id, sort_order, title, body, is_published, created_at, updated_at FROM nap_rules';
+    if ($publishedOnly) {
+        $sql .= ' WHERE is_published = 1';
+    }
+    $sql .= ' ORDER BY sort_order ASC, id ASC';
+    $rows = db()->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $out[] = [
+            'id' => (int) $row['id'],
+            'sort_order' => (int) ($row['sort_order'] ?? 0),
+            'title' => (string) ($row['title'] ?? ''),
+            'body' => (string) ($row['body'] ?? ''),
+            'is_published' => !empty($row['is_published']),
+            'created_at' => (string) ($row['created_at'] ?? ''),
+            'updated_at' => (string) ($row['updated_at'] ?? ''),
+        ];
+    }
+
+    return $out;
+}
+
+/**
+ * @return array{ok: bool, error?: string, id?: int}
+ */
+function saveNapRule(array $input, ?int $id = null): array
+{
+    if (!dbAvailable()) {
+        return ['ok' => false, 'error' => 'Database unavailable.'];
+    }
+    dbEnsureSchema();
+
+    $title = trim((string) ($input['title'] ?? ''));
+    $body = trim((string) ($input['body'] ?? ''));
+    $sort = (int) ($input['sort_order'] ?? 0);
+    $published = !empty($input['is_published']) ? 1 : 0;
+    if ($title === '') {
+        return ['ok' => false, 'error' => 'Title is required.'];
+    }
+    if ($body === '') {
+        return ['ok' => false, 'error' => 'Rule text is required.'];
+    }
+
+    $now = gmdate('Y-m-d H:i:s');
+    $pdo = db();
+    if ($id !== null && $id > 0) {
+        $stmt = $pdo->prepare(
+            'UPDATE nap_rules SET sort_order = ?, title = ?, body = ?, is_published = ?, updated_at = ? WHERE id = ?'
+        );
+        $stmt->execute([$sort, $title, $body, $published, $now, $id]);
+        return ['ok' => true, 'id' => $id];
+    }
+
+    $stmt = $pdo->prepare(
+        'INSERT INTO nap_rules (sort_order, title, body, is_published, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    $stmt->execute([$sort, $title, $body, $published, $now, $now]);
+
+    return ['ok' => true, 'id' => (int) $pdo->lastInsertId()];
+}
+
+/**
+ * @return array{ok: bool, error?: string}
+ */
+function deleteNapRule(int $id): array
+{
+    if ($id <= 0) {
+        return ['ok' => false, 'error' => 'Invalid rule id.'];
+    }
+    if (!dbAvailable()) {
+        return ['ok' => false, 'error' => 'Database unavailable.'];
+    }
+    dbEnsureSchema();
+    db()->prepare('DELETE FROM nap_rules WHERE id = ?')->execute([$id]);
+
+    return ['ok' => true];
+}
+
+/**
+ * @return list<array{id: int, title: string, body: string, is_published: bool, created_at: string, updated_at: string}>
+ */
+function loadAnnouncements(bool $publishedOnly = false): array
+{
+    if (!dbAvailable()) {
+        return [];
+    }
+    dbEnsureSchema();
+    $sql = 'SELECT id, title, body, is_published, created_at, updated_at FROM announcements';
+    if ($publishedOnly) {
+        $sql .= ' WHERE is_published = 1';
+    }
+    $sql .= ' ORDER BY created_at DESC, id DESC';
+    $rows = db()->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $out[] = [
+            'id' => (int) $row['id'],
+            'title' => (string) ($row['title'] ?? ''),
+            'body' => (string) ($row['body'] ?? ''),
+            'is_published' => !empty($row['is_published']),
+            'created_at' => (string) ($row['created_at'] ?? ''),
+            'updated_at' => (string) ($row['updated_at'] ?? ''),
+        ];
+    }
+
+    return $out;
+}
+
+/**
+ * @return array{ok: bool, error?: string, id?: int}
+ */
+function saveAnnouncement(array $input, ?int $id = null): array
+{
+    if (!dbAvailable()) {
+        return ['ok' => false, 'error' => 'Database unavailable.'];
+    }
+    dbEnsureSchema();
+
+    $title = trim((string) ($input['title'] ?? ''));
+    $body = trim((string) ($input['body'] ?? ''));
+    $published = !empty($input['is_published']) ? 1 : 0;
+    if ($title === '') {
+        return ['ok' => false, 'error' => 'Title is required.'];
+    }
+    if ($body === '') {
+        return ['ok' => false, 'error' => 'Announcement text is required.'];
+    }
+
+    $now = gmdate('Y-m-d H:i:s');
+    $pdo = db();
+    if ($id !== null && $id > 0) {
+        $stmt = $pdo->prepare(
+            'UPDATE announcements SET title = ?, body = ?, is_published = ?, updated_at = ? WHERE id = ?'
+        );
+        $stmt->execute([$title, $body, $published, $now, $id]);
+        return ['ok' => true, 'id' => $id];
+    }
+
+    $stmt = $pdo->prepare(
+        'INSERT INTO announcements (title, body, is_published, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+    );
+    $stmt->execute([$title, $body, $published, $now, $now]);
+
+    return ['ok' => true, 'id' => (int) $pdo->lastInsertId()];
+}
+
+/**
+ * @return array{ok: bool, error?: string}
+ */
+function deleteAnnouncement(int $id): array
+{
+    if ($id <= 0) {
+        return ['ok' => false, 'error' => 'Invalid announcement id.'];
+    }
+    if (!dbAvailable()) {
+        return ['ok' => false, 'error' => 'Database unavailable.'];
+    }
+    dbEnsureSchema();
+    db()->prepare('DELETE FROM announcements WHERE id = ?')->execute([$id]);
 
     return ['ok' => true];
 }
@@ -2541,7 +3618,7 @@ function findAppUserById(string $id): ?array
         return null;
     }
     dbEnsureSchema();
-    $stmt = db()->prepare('SELECT id, email, display_name, photo_url FROM app_users WHERE id = ? LIMIT 1');
+    $stmt = db()->prepare('SELECT id, email, username, display_name, photo_url FROM app_users WHERE id = ? LIMIT 1');
     $stmt->execute([$id]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!is_array($row)) {
@@ -2551,6 +3628,7 @@ function findAppUserById(string $id): ?array
     return [
         'id' => (string) $row['id'],
         'email' => $row['email'] !== null ? (string) $row['email'] : null,
+        'username' => $row['username'] !== null ? (string) $row['username'] : null,
         'display_name' => (string) ($row['display_name'] ?? 'User'),
         'photo_url' => $row['photo_url'] !== null ? (string) $row['photo_url'] : null,
     ];
@@ -2647,11 +3725,15 @@ function upsertAppUserFromGoogle(array $google): array
          VALUES (?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
            email = VALUES(email),
-           display_name = VALUES(display_name),
            photo_url = VALUES(photo_url),
            last_seen_at = VALUES(last_seen_at)'
     );
     $stmt->execute([$id, $email, $name, $photo, $now, $now]);
+
+    $user = findAppUserById($id);
+    if ($user !== null) {
+        return $user;
+    }
 
     return [
         'id' => $id,
@@ -2666,6 +3748,172 @@ function loginAppUser(array $user): void
     startAppSession();
     session_regenerate_id(true);
     $_SESSION['app_user_id'] = $user['id'];
+}
+
+/**
+ * Normalize a local login username (case-insensitive unique).
+ */
+function normalizeAppUsername(string $username): string
+{
+    $username = trim($username);
+    $username = preg_replace('/\s+/u', '', $username) ?? $username;
+
+    return mb_strtolower($username);
+}
+
+/**
+ * Create or update a manually provisioned username/password account (no public signup).
+ *
+ * @return array{ok: bool, error?: string, user?: array{id: string, email: ?string, display_name: string, photo_url: ?string, username: ?string}}
+ */
+function upsertLocalAppUser(string $username, string $password, ?string $displayName = null): array
+{
+    $rawUsername = trim($username);
+    $usernameKey = normalizeAppUsername($rawUsername);
+    if ($usernameKey === '' || mb_strlen($usernameKey) < 2) {
+        return ['ok' => false, 'error' => 'Username is too short.'];
+    }
+    if (mb_strlen($usernameKey) > 64) {
+        return ['ok' => false, 'error' => 'Username is too long.'];
+    }
+    if (!preg_match('/^[a-z0-9._-]+$/i', $usernameKey)) {
+        return ['ok' => false, 'error' => 'Username may only use letters, numbers, dot, underscore, or hyphen.'];
+    }
+    if (strlen($password) < 8) {
+        return ['ok' => false, 'error' => 'Password must be at least 8 characters.'];
+    }
+    if (!dbAvailable()) {
+        return ['ok' => false, 'error' => 'Database unavailable.'];
+    }
+
+    dbEnsureSchema();
+    $display = trim((string) $displayName);
+    if ($display === '') {
+        $display = $rawUsername;
+    }
+    $display = mb_substr($display, 0, 120);
+    $hash = password_hash($password, PASSWORD_DEFAULT);
+    if ($hash === false) {
+        return ['ok' => false, 'error' => 'Could not hash password.'];
+    }
+
+    $now = gmdate('Y-m-d H:i:s');
+    $pdo = db();
+
+    $existing = findAppUserByUsername($usernameKey);
+    if ($existing !== null) {
+        $stmt = $pdo->prepare(
+            'UPDATE app_users
+             SET username = ?, password_hash = ?, display_name = ?, last_seen_at = ?
+             WHERE id = ?'
+        );
+        $stmt->execute([$usernameKey, $hash, $display, $now, $existing['id']]);
+        $user = findAppUserById($existing['id']);
+        if ($user === null) {
+            return ['ok' => false, 'error' => 'Could not update user.'];
+        }
+        $user['username'] = $usernameKey;
+
+        return ['ok' => true, 'user' => $user];
+    }
+
+    $id = 'local_' . preg_replace('/[^a-z0-9._-]+/i', '_', $usernameKey);
+    $id = mb_substr($id, 0, 64);
+    // Avoid colliding with a Google sub that somehow matches.
+    $clash = findAppUserById($id);
+    if ($clash !== null && empty($clash['username'])) {
+        $id = mb_substr('local_' . $usernameKey . '_' . bin2hex(random_bytes(3)), 0, 64);
+    }
+
+    $stmt = $pdo->prepare(
+        'INSERT INTO app_users (id, email, username, password_hash, display_name, photo_url, created_at, last_seen_at)
+         VALUES (?, NULL, ?, ?, ?, NULL, ?, ?)'
+    );
+    $stmt->execute([$id, $usernameKey, $hash, $display, $now, $now]);
+
+    $user = findAppUserById($id);
+    if ($user === null) {
+        return ['ok' => false, 'error' => 'Could not create user.'];
+    }
+    $user['username'] = $usernameKey;
+
+    return ['ok' => true, 'user' => $user];
+}
+
+/**
+ * @return array{id: string, email: ?string, display_name: string, photo_url: ?string, username: ?string}|null
+ */
+function findAppUserByUsername(string $username): ?array
+{
+    $username = normalizeAppUsername($username);
+    if ($username === '' || !dbAvailable()) {
+        return null;
+    }
+    dbEnsureSchema();
+    $stmt = db()->prepare(
+        'SELECT id, email, username, display_name, photo_url
+         FROM app_users
+         WHERE username = ?
+         LIMIT 1'
+    );
+    $stmt->execute([$username]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!is_array($row)) {
+        return null;
+    }
+
+    return [
+        'id' => (string) $row['id'],
+        'email' => $row['email'] !== null ? (string) $row['email'] : null,
+        'username' => $row['username'] !== null ? (string) $row['username'] : null,
+        'display_name' => (string) ($row['display_name'] ?? 'User'),
+        'photo_url' => $row['photo_url'] !== null ? (string) $row['photo_url'] : null,
+    ];
+}
+
+/**
+ * Verify a local username/password login.
+ *
+ * @return array{ok: bool, error?: string, user?: array{id: string, email: ?string, display_name: string, photo_url: ?string, username: ?string}}
+ */
+function loginLocalAppUser(string $username, string $password): array
+{
+    $username = normalizeAppUsername($username);
+    if ($username === '' || $password === '') {
+        return ['ok' => false, 'error' => 'Enter username and password.'];
+    }
+    if (!dbAvailable()) {
+        return ['ok' => false, 'error' => 'Database unavailable.'];
+    }
+
+    dbEnsureSchema();
+    $stmt = db()->prepare(
+        'SELECT id, email, username, password_hash, display_name, photo_url
+         FROM app_users
+         WHERE username = ?
+         LIMIT 1'
+    );
+    $stmt->execute([$username]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!is_array($row) || empty($row['password_hash'])) {
+        return ['ok' => false, 'error' => 'Invalid username or password.'];
+    }
+    if (!password_verify($password, (string) $row['password_hash'])) {
+        return ['ok' => false, 'error' => 'Invalid username or password.'];
+    }
+
+    $now = gmdate('Y-m-d H:i:s');
+    db()->prepare('UPDATE app_users SET last_seen_at = ? WHERE id = ?')->execute([$now, $row['id']]);
+
+    $user = [
+        'id' => (string) $row['id'],
+        'email' => $row['email'] !== null ? (string) $row['email'] : null,
+        'username' => $row['username'] !== null ? (string) $row['username'] : null,
+        'display_name' => (string) ($row['display_name'] ?? 'User'),
+        'photo_url' => $row['photo_url'] !== null ? (string) $row['photo_url'] : null,
+    ];
+
+    return ['ok' => true, 'user' => $user];
 }
 
 function logoutAppUser(): void
@@ -2687,7 +3935,7 @@ function privateThreadId(string $a, string $b): string
 /**
  * @return list<array{id: string, email: ?string, display_name: string, photo_url: ?string, last_seen_at: ?string}>
  */
-function listAppUsers(?string $excludeId = null): array
+function listAppUsers(?string $excludeId = null, bool $includeEmail = false): array
 {
     if (!dbAvailable()) {
         return [];
@@ -2706,7 +3954,7 @@ function listAppUsers(?string $excludeId = null): array
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
         $out[] = [
             'id' => (string) $row['id'],
-            'email' => $row['email'] !== null ? (string) $row['email'] : null,
+            'email' => $includeEmail && $row['email'] !== null ? (string) $row['email'] : null,
             'display_name' => (string) ($row['display_name'] ?? 'User'),
             'photo_url' => $row['photo_url'] !== null ? (string) $row['photo_url'] : null,
             'last_seen_at' => $row['last_seen_at'] !== null ? (string) $row['last_seen_at'] : null,
@@ -2714,6 +3962,41 @@ function listAppUsers(?string $excludeId = null): array
     }
 
     return $out;
+}
+
+/**
+ * @return array{ok: bool, error?: string, user?: array{id: string, email: ?string, display_name: string, photo_url: ?string}}
+ */
+function updateAppUserDisplayName(string $userId, string $displayName): array
+{
+    $userId = trim($userId);
+    $name = trim($displayName);
+    if ($userId === '') {
+        return ['ok' => false, 'error' => 'Not signed in.'];
+    }
+    if ($name === '') {
+        return ['ok' => false, 'error' => 'Name cannot be empty.'];
+    }
+    if (mb_strlen($name) < 2) {
+        return ['ok' => false, 'error' => 'Name is too short.'];
+    }
+    if (mb_strlen($name) > 120) {
+        return ['ok' => false, 'error' => 'Name is too long.'];
+    }
+    if (!dbAvailable()) {
+        return ['ok' => false, 'error' => 'Database unavailable.'];
+    }
+    dbEnsureSchema();
+
+    $stmt = db()->prepare('UPDATE app_users SET display_name = ? WHERE id = ?');
+    $stmt->execute([mb_substr($name, 0, 120), $userId]);
+
+    $user = findAppUserById($userId);
+    if ($user === null) {
+        return ['ok' => false, 'error' => 'User not found.'];
+    }
+
+    return ['ok' => true, 'user' => $user];
 }
 
 /**
@@ -2884,6 +4167,1402 @@ function runAllianceDataUpdate(?string $userAgent = null): array
         'output' => $output,
         'error' => $ok ? null : ($output !== '' ? $output : ('Update failed (HTTP ' . $httpCode . ').')),
     ];
+}
+
+/**
+ * Load cached SvS opponent scout payload (alliances + players), refreshing from Atlas v2 when stale
+ * (/servers/{kid}/alliances + power.rank/furnace.rank boards + top-20 members per alliance).
+ *
+ * @return array{
+ *   kid: string,
+ *   fetched_at: string,
+ *   alliances: list<array<string, mixed>>,
+ *   players: list<array<string, mixed>>,
+ *   source: string,
+ *   error: ?string
+ * }
+ */
+function loadSvsOpponentState(string $kid = SVS_OPPONENT_KID, bool $forceRefresh = false): array
+{
+    $cache = loadJson(SVS_OPPONENT_CACHE_FILE, null);
+    $fresh = false;
+    if (is_array($cache) && !$forceRefresh) {
+        $fetchedAt = strtotime((string) ($cache['fetched_at'] ?? '')) ?: 0;
+        if ($fetchedAt > 0 && (time() - $fetchedAt) < SVS_OPPONENT_CACHE_TTL) {
+            $fresh = true;
+        }
+    }
+
+    if ($fresh && is_array($cache)) {
+        return [
+            'kid' => (string) ($cache['kid'] ?? $kid),
+            'fetched_at' => (string) ($cache['fetched_at'] ?? ''),
+            'alliances' => is_array($cache['alliances'] ?? null) ? $cache['alliances'] : [],
+            'players' => is_array($cache['players'] ?? null) ? $cache['players'] : [],
+            'source' => 'cache',
+            'error' => null,
+        ];
+    }
+
+    try {
+        require_once __DIR__ . '/collector.php';
+        require_once __DIR__ . '/player-lookup.php';
+
+        $config = loadConfig();
+        $alliances = fetchAlliances($kid);
+        $players = rankPlayersByPower(fetchPlayers($kid));
+        $alliances = enrichAlliancesMaxPowerFromPlayers($alliances, $players);
+
+        // Atlas v2: boards/members carry alliance_tag, and /members is capped at the top 20.
+        // 1) Match unique max_power → alliance tag.
+        // 2) Detail-lookup top whales for reliable tags (SvS scout value).
+        $maxPowerToTag = [];
+        foreach ($alliances as $alliance) {
+            if (!is_array($alliance)) {
+                continue;
+            }
+            $max = isset($alliance['max_power']) ? (int) $alliance['max_power'] : 0;
+            $tag = trim((string) ($alliance['tag'] ?? ''));
+            $aid = trim((string) ($alliance['id'] ?? ''));
+            if ($max <= 0 || $tag === '') {
+                continue;
+            }
+            if (!isset($maxPowerToTag[$max])) {
+                $maxPowerToTag[$max] = ['alliance_tag' => $tag, 'alliance_id' => $aid !== '' ? $aid : null];
+            } else {
+                $maxPowerToTag[$max] = null; // ambiguous
+            }
+        }
+        foreach ($players as &$player) {
+            if (!is_array($player)) {
+                continue;
+            }
+            if (!empty($player['alliance_tag'])) {
+                continue;
+            }
+            $power = isset($player['power']) ? (int) $player['power'] : 0;
+            if ($power > 0 && isset($maxPowerToTag[$power]) && is_array($maxPowerToTag[$power])) {
+                $player['alliance_tag'] = $maxPowerToTag[$power]['alliance_tag'];
+                if (!empty($maxPowerToTag[$power]['alliance_id'])) {
+                    $player['alliance_id'] = $maxPowerToTag[$power]['alliance_id'];
+                }
+            }
+        }
+        unset($player);
+
+        $taggedViaDetail = 0;
+        foreach (array_slice($players, 0, 20) as $idx => $player) {
+            if (!is_array($player)) {
+                continue;
+            }
+            if (!empty($players[$idx]['alliance_tag'])) {
+                continue;
+            }
+            $uid = trim((string) ($player['id'] ?? ''));
+            if ($uid === '' || preg_match('/^\d+$/', $uid) !== 1) {
+                continue;
+            }
+            try {
+                $detail = lookupPlayerByUid($uid, $config);
+            } catch (Throwable $e) {
+                continue;
+            }
+            if (!is_array($detail)) {
+                continue;
+            }
+            $tag = trim((string) ($detail['alliance_tag'] ?? ''));
+            $aid = trim((string) ($detail['alliance_id'] ?? ''));
+            if ($tag !== '') {
+                $players[$idx]['alliance_tag'] = $tag;
+                $taggedViaDetail++;
+            }
+            if ($aid !== '') {
+                $players[$idx]['alliance_id'] = $aid;
+            }
+        }
+        $alliances = enrichAlliancesMaxPowerFromPlayers($alliances, $players);
+
+        $payload = [
+            'kid' => $kid,
+            'fetched_at' => nowUtc(),
+            'alliances' => $alliances,
+            'players' => $players,
+            'tagged_via_detail' => $taggedViaDetail,
+        ];
+        saveJson(SVS_OPPONENT_CACHE_FILE, $payload);
+
+        return [
+            'kid' => $kid,
+            'fetched_at' => $payload['fetched_at'],
+            'alliances' => $alliances,
+            'players' => $players,
+            'source' => 'live',
+            'error' => null,
+        ];
+    } catch (Throwable $e) {
+        if (is_array($cache) && is_array($cache['players'] ?? null) && $cache['players'] !== []) {
+            return [
+                'kid' => (string) ($cache['kid'] ?? $kid),
+                'fetched_at' => (string) ($cache['fetched_at'] ?? ''),
+                'alliances' => is_array($cache['alliances'] ?? null) ? $cache['alliances'] : [],
+                'players' => $cache['players'],
+                'source' => 'stale-cache',
+                'error' => $e->getMessage(),
+            ];
+        }
+
+        return [
+            'kid' => $kid,
+            'fetched_at' => '',
+            'alliances' => [],
+            'players' => [],
+            'source' => 'error',
+            'error' => $e->getMessage(),
+        ];
+    }
+}
+
+/**
+ * Aggregate SvS-relevant metrics for one state from alliance + player boards.
+ *
+ * @param list<array<string, mixed>> $alliances
+ * @param list<array<string, mixed>> $players
+ * @return array<string, mixed>
+ */
+function buildSvsStateProfile(string $kid, array $alliances, array $players): array
+{
+    $players = rankPlayersByPower($players);
+    $alliances = enrichAlliancesMaxPowerFromPlayers($alliances, $players);
+    usort($alliances, static fn(array $a, array $b): int => ($a['rank'] ?? PHP_INT_MAX) <=> ($b['rank'] ?? PHP_INT_MAX));
+
+    $powers = [];
+    $furnaces = [];
+    foreach ($players as $player) {
+        if (!is_array($player)) {
+            continue;
+        }
+        if (isset($player['power'])) {
+            $powers[] = (int) $player['power'];
+        }
+        if (isset($player['stove_lv'])) {
+            $furnaces[] = (int) $player['stove_lv'];
+        }
+    }
+
+    $sumTop = static function (array $arr, int $n): int {
+        return (int) array_sum(array_slice($arr, 0, min($n, count($arr))));
+    };
+    $medianOf = static function (array $arr): ?int {
+        $c = count($arr);
+        if ($c === 0) {
+            return null;
+        }
+        $sorted = $arr;
+        sort($sorted);
+        $mid = intdiv($c, 2);
+        return $c % 2 === 1 ? $sorted[$mid] : (int) round(($sorted[$mid - 1] + $sorted[$mid]) / 2);
+    };
+    $countAtLeast = static function (array $arr, int $threshold): int {
+        $n = 0;
+        foreach ($arr as $v) {
+            if ((int) $v >= $threshold) {
+                $n++;
+            }
+        }
+        return $n;
+    };
+
+    $furnaceBuckets = [];
+    foreach ($furnaces as $lv) {
+        $key = (string) $lv;
+        $furnaceBuckets[$key] = ($furnaceBuckets[$key] ?? 0) + 1;
+    }
+    ksort($furnaceBuckets, SORT_NUMERIC);
+
+    $top100Powers = array_slice($powers, 0, min(100, count($powers)));
+    $top100Furnaces = array_slice($furnaces, 0, min(100, count($furnaces)));
+    $top100Sum = $sumTop($powers, 100);
+
+    $allyPower = 0;
+    $allyMembers = 0;
+    foreach ($alliances as $alliance) {
+        if (!is_array($alliance)) {
+            continue;
+        }
+        $allyPower += (int) ($alliance['power'] ?? 0);
+        $allyMembers += (int) ($alliance['members'] ?? 0);
+    }
+
+    $topAlliancePowers = [];
+    foreach ($alliances as $alliance) {
+        if (!is_array($alliance)) {
+            continue;
+        }
+        $topAlliancePowers[] = (int) ($alliance['power'] ?? 0);
+    }
+
+    $topPlayers = [];
+    foreach (array_slice($players, 0, 25) as $player) {
+        if (!is_array($player)) {
+            continue;
+        }
+        $topPlayers[] = [
+            'rank' => $player['rank'] ?? null,
+            'id' => $player['id'] ?? null,
+            'name' => $player['name'] ?? null,
+            'power' => isset($player['power']) ? (int) $player['power'] : null,
+            'stove_lv' => isset($player['stove_lv']) ? (int) $player['stove_lv'] : null,
+            'alliance_tag' => $player['alliance_tag'] ?? null,
+            'last_jump_pct' => $player['last_jump_pct'] ?? null,
+        ];
+    }
+
+    $topAlliances = [];
+    foreach (array_slice($alliances, 0, 10) as $alliance) {
+        if (!is_array($alliance)) {
+            continue;
+        }
+        $topAlliances[] = [
+            'rank' => $alliance['rank'] ?? null,
+            'id' => $alliance['id'] ?? null,
+            'tag' => $alliance['tag'] ?? null,
+            'name' => $alliance['name'] ?? null,
+            'power' => isset($alliance['power']) ? (int) $alliance['power'] : null,
+            'members' => isset($alliance['members']) ? (int) $alliance['members'] : null,
+            'max_power' => isset($alliance['max_power']) ? (int) $alliance['max_power'] : null,
+            'median_power' => isset($alliance['median_power']) ? (int) $alliance['median_power'] : null,
+            'avg_power' => allianceAveragePower($alliance),
+        ];
+    }
+
+    return [
+        'kid' => $kid,
+        'alliance_count' => count($alliances),
+        'player_count' => count($players),
+        'state_alliance_power' => $allyPower,
+        'state_members' => $allyMembers,
+        'top1' => $powers[0] ?? null,
+        'top5_sum' => $sumTop($powers, 5),
+        'top10_sum' => $sumTop($powers, 10),
+        'top20_sum' => $sumTop($powers, 20),
+        'top50_sum' => $sumTop($powers, 50),
+        'top100_sum' => $top100Sum,
+        'top150_sum' => $sumTop($powers, 150),
+        'top200_sum' => $sumTop($powers, 200),
+        'avg_top100' => $top100Powers !== [] ? (int) round(array_sum($top100Powers) / count($top100Powers)) : null,
+        'median_top100' => $medianOf($top100Powers),
+        'min_top100' => $top100Powers !== [] ? (int) min($top100Powers) : null,
+        'top10_share_of_100' => $top100Sum > 0 ? round($sumTop($powers, 10) / $top100Sum, 4) : null,
+        'top20_share_of_100' => $top100Sum > 0 ? round($sumTop($powers, 20) / $top100Sum, 4) : null,
+        'whales_100m' => $countAtLeast($powers, 100_000_000),
+        'whales_80m' => $countAtLeast($powers, 80_000_000),
+        'whales_60m' => $countAtLeast($powers, 60_000_000),
+        'whales_50m' => $countAtLeast($powers, 50_000_000),
+        'fc30_plus' => $countAtLeast($furnaces, 30),
+        'fc31_plus' => $countAtLeast($furnaces, 31),
+        'avg_furnace_top100' => $top100Furnaces !== []
+            ? round(array_sum($top100Furnaces) / count($top100Furnaces), 2)
+            : null,
+        'furnace_buckets' => $furnaceBuckets,
+        'top2_alliance_power' => $sumTop($topAlliancePowers, 2),
+        'top3_alliance_power' => $sumTop($topAlliancePowers, 3),
+        'top5_alliance_power' => $sumTop($topAlliancePowers, 5),
+        'top_alliances' => $topAlliances,
+        'top_players' => $topPlayers,
+        'alliances' => $alliances,
+        'players' => $players,
+    ];
+}
+
+/**
+ * Narrative + verdict insights comparing our state vs SvS opponent.
+ *
+ * @param array<string, mixed> $us
+ * @param array<string, mixed> $them
+ * @return array{verdict: string, edge: string, bullets: list<string>}
+ */
+function buildSvsInsights(array $us, array $them): array
+{
+    $diff = static function (?int $a, ?int $b): ?int {
+        if ($a === null || $b === null) {
+            return null;
+        }
+        return $a - $b;
+    };
+    $pct = static function (?int $a, ?int $b): ?float {
+        if ($a === null || $b === null || $b === 0) {
+            return null;
+        }
+        return round((($a - $b) / $b) * 100, 2);
+    };
+
+    $top100Diff = $diff($us['top100_sum'] ?? null, $them['top100_sum'] ?? null);
+    $top100Pct = $pct($us['top100_sum'] ?? null, $them['top100_sum'] ?? null);
+    $top5Diff = $diff($us['top5_sum'] ?? null, $them['top5_sum'] ?? null);
+    $top10Diff = $diff($us['top10_sum'] ?? null, $them['top10_sum'] ?? null);
+    $floorDiff = $diff($us['min_top100'] ?? null, $them['min_top100'] ?? null);
+    $fcDiff = null;
+    if (isset($us['avg_furnace_top100'], $them['avg_furnace_top100'])) {
+        $fcDiff = round((float) $us['avg_furnace_top100'] - (float) $them['avg_furnace_top100'], 2);
+    }
+
+    $score = 0;
+    if ($top100Diff !== null) {
+        $score += $top100Diff > 0 ? 2 : ($top100Diff < 0 ? -2 : 0);
+    }
+    if ($top5Diff !== null) {
+        $score += $top5Diff > 0 ? 1 : ($top5Diff < 0 ? -1 : 0);
+    }
+    if ($top10Diff !== null) {
+        $score += $top10Diff > 0 ? 1 : ($top10Diff < 0 ? -1 : 0);
+    }
+    if ($floorDiff !== null) {
+        $score += $floorDiff > 0 ? 1 : ($floorDiff < 0 ? -1 : 0);
+    }
+    if (($us['whales_80m'] ?? 0) !== ($them['whales_80m'] ?? 0)) {
+        $score += (($us['whales_80m'] ?? 0) > ($them['whales_80m'] ?? 0)) ? 1 : -1;
+    }
+
+    if ($score >= 3) {
+        $verdict = 'Slight edge to 4627 on paper';
+        $edge = 'us';
+    } elseif ($score <= -3) {
+        $verdict = 'Slight edge to 4642 on paper';
+        $edge = 'them';
+    } else {
+        $verdict = 'Even matchup — coordination decides it';
+        $edge = 'even';
+    }
+
+    $bullets = [];
+    if ($top100Diff !== null && $top100Pct !== null) {
+        if ($top100Diff >= 0) {
+            $bullets[] = 'Top 100 power (primary SvS matchmaking signal per Reddit/wiki): 4627 leads by '
+                . formatPower($top100Diff) . ' (' . number_format(abs($top100Pct), 2) . '%).';
+        } else {
+            $bullets[] = 'Top 100 power (primary SvS matchmaking signal per Reddit/wiki): 4642 leads by '
+                . formatPower(abs($top100Diff)) . ' (' . number_format(abs($top100Pct), 2) . '%).';
+        }
+    }
+    if ($top5Diff !== null) {
+        $bullets[] = $top5Diff >= 0
+            ? 'Whale tip (top 5): 4627 is ahead by ' . formatPower($top5Diff) . ' — better solo/rally breakers.'
+            : 'Whale tip (top 5): 4642 is ahead by ' . formatPower(abs($top5Diff)) . ' — expect harder castle holds.';
+    }
+    $bullets[] = 'Rally-lead density (≥80M): 4627 has ' . (int) ($us['whales_80m'] ?? 0)
+        . ', 4642 has ' . (int) ($them['whales_80m'] ?? 0)
+        . '. Reddit SvS guides stress scouting whale count for multi-alliance counter-rallies.';
+    if ($floorDiff !== null) {
+        $bullets[] = $floorDiff >= 0
+            ? 'Top-100 floor is higher for 4627 (' . formatPower($us['min_top100'] ?? null)
+                . ' vs ' . formatPower($them['min_top100'] ?? null) . ') — deeper mid pack.'
+            : 'Top-100 floor favors 4642 (' . formatPower($them['min_top100'] ?? null)
+                . ' vs ' . formatPower($us['min_top100'] ?? null) . ').';
+    }
+    if ($fcDiff !== null) {
+        $bullets[] = 'Avg Atlas furnace scale (top 100): 4627 ' . number_format((float) ($us['avg_furnace_top100'] ?? 0), 2)
+            . ' vs 4642 ' . number_format((float) ($them['avg_furnace_top100'] ?? 0), 2)
+            . ' (Δ ' . ($fcDiff >= 0 ? '+' : '') . $fcDiff . '). Past 30 = Crystal (33→C1.3, 40→C2.5).';
+    }
+    $bullets[] = 'Battle structure: top-3 alliance power is '
+        . formatPower($us['top3_alliance_power'] ?? null) . ' (4627) vs '
+        . formatPower($them['top3_alliance_power'] ?? null)
+        . ' (4642). Strong states often run 2–4 alliances for castle + counter-rallies + turrets.';
+    $bullets[] = 'Concentration: top 10 share of top 100 is '
+        . number_format(((float) ($us['top10_share_of_100'] ?? 0)) * 100, 1) . '% (4627) vs '
+        . number_format(((float) ($them['top10_share_of_100'] ?? 0)) * 100, 1)
+        . '% (4642). Higher share = more whale-dependent.';
+
+    return [
+        'verdict' => $verdict,
+        'edge' => $edge,
+        'bullets' => $bullets,
+        'top100_diff' => $top100Diff,
+        'top100_pct' => $top100Pct,
+        'top5_diff' => $top5Diff,
+        'top10_diff' => $top10Diff,
+        'floor_diff' => $floorDiff,
+    ];
+}
+
+/**
+ * Proxy investment score from Atlas arena team snapshot.
+ * Not true in-game hero power — weighted stars/training/exclusive/skills/gear levels.
+ *
+ * @param array<string, mixed> $arena
+ * @return array{
+ *   score: int,
+ *   hero_count: int,
+ *   avg_star: ?float,
+ *   avg_hero_lv: ?float,
+ *   avg_gear_slv: ?float,
+ *   max_gear_slv: ?int,
+ *   exclusive_count: int,
+ *   full_skills: int,
+ *   gear_pieces: int,
+ *   gear_detailed: int,
+ *   status: ?string,
+ *   stale: bool,
+ *   observed_at: ?string,
+ *   observed_every_days: ?int,
+ *   investment_withheld: bool,
+ *   heroes: list<array<string, mixed>>
+ * }
+ */
+function summarizeArenaInvestment(array $arena): array
+{
+    $heroesRaw = is_array($arena['heroes'] ?? null) ? $arena['heroes'] : [];
+    $stars = [];
+    $levels = [];
+    $gearSlvs = [];
+    $exclusiveCount = 0;
+    $fullSkills = 0;
+    $gearPieces = 0;
+    $gearDetailed = 0;
+    $score = 0;
+    $heroesOut = [];
+
+    foreach ($heroesRaw as $hero) {
+        if (!is_array($hero)) {
+            continue;
+        }
+        $star = isset($hero['star']) ? (int) $hero['star'] : 0;
+        $lv = isset($hero['lv']) ? (int) $hero['lv'] : 0;
+        $training = isset($hero['trainingLv']) ? (int) $hero['trainingLv'] : 0;
+        $exclusive = isset($hero['exclusiveElv']) ? (int) $hero['exclusiveElv'] : 0;
+        $skills = is_array($hero['skillLv'] ?? null) ? $hero['skillLv'] : [];
+        $skillSum = 0;
+        foreach ($skills as $sk) {
+            $skillSum += (int) $sk;
+        }
+        if ($exclusive > 0) {
+            $exclusiveCount++;
+        }
+        if ($skillSum >= 15) {
+            $fullSkills++;
+        }
+        $stars[] = $star;
+        $levels[] = $lv;
+
+        $heroGearScore = 0;
+        $heroMaxSlv = 0;
+        $gear = is_array($hero['gear'] ?? null) ? $hero['gear'] : [];
+        foreach ($gear as $piece) {
+            if (!is_array($piece)) {
+                continue;
+            }
+            $gearPieces++;
+            $slv = isset($piece['slv']) ? (int) $piece['slv'] : null;
+            $rlv = isset($piece['rlv']) ? (int) $piece['rlv'] : null;
+            if ($slv !== null || $rlv !== null || isset($piece['exp'])) {
+                $gearDetailed++;
+            }
+            if ($slv !== null) {
+                $gearSlvs[] = $slv;
+                $heroMaxSlv = max($heroMaxSlv, $slv);
+                $heroGearScore += $slv;
+            }
+            if ($rlv !== null) {
+                $heroGearScore += $rlv * 2;
+            }
+        }
+
+        $heroScore = ($star * 10) + $lv + $training + ($exclusive * 8) + ($skillSum * 3) + $heroGearScore;
+        $score += $heroScore;
+        $heroesOut[] = [
+            'pos' => $hero['pos'] ?? null,
+            'hero_id' => $hero['heroId'] ?? null,
+            'star' => $star,
+            'lv' => $lv,
+            'training_lv' => $training > 0 ? $training : null,
+            'exclusive_elv' => $exclusive > 0 ? $exclusive : null,
+            'skills' => $skills,
+            'max_gear_slv' => $heroMaxSlv > 0 ? $heroMaxSlv : null,
+            'score' => $heroScore,
+        ];
+    }
+
+    return [
+        'score' => $score,
+        'hero_count' => count($heroesOut),
+        'avg_star' => $stars !== [] ? round(array_sum($stars) / count($stars), 2) : null,
+        'avg_hero_lv' => $levels !== [] ? round(array_sum($levels) / count($levels), 1) : null,
+        'avg_gear_slv' => $gearSlvs !== [] ? round(array_sum($gearSlvs) / count($gearSlvs), 1) : null,
+        'max_gear_slv' => $gearSlvs !== [] ? (int) max($gearSlvs) : null,
+        'exclusive_count' => $exclusiveCount,
+        'full_skills' => $fullSkills,
+        'gear_pieces' => $gearPieces,
+        'gear_detailed' => $gearDetailed,
+        'status' => isset($arena['status']) ? (string) $arena['status'] : null,
+        'stale' => !empty($arena['stale']),
+        'observed_at' => isset($arena['observedAt']) ? (string) $arena['observedAt'] : null,
+        'observed_every_days' => isset($arena['observedEveryDays']) ? (int) $arena['observedEveryDays'] : null,
+        'investment_withheld' => !empty($arena['investmentWithheld']),
+        'heroes' => $heroesOut,
+    ];
+}
+
+/**
+ * @param list<array<string, mixed>> $players
+ * @return list<array<string, mixed>>
+ */
+function fetchArenaScoutRows(array $players, array $config, int $limit = SVS_ARENA_SCOUT_LIMIT): array
+{
+    // WOS Atlas v1 /players/{uid}/arena is retired (401) and v2 has no arena/hero endpoint
+    // (/players/{uid}/arena → 404). Return no rows so the SvS page shows "No Arena snapshots"
+    // instead of firing 24 failing requests per refresh. Re-enable if a source appears.
+    if (empty($config['arena_scout_source'])) {
+        return [];
+    }
+
+    require_once __DIR__ . '/player-lookup.php';
+
+    $rows = [];
+    $n = 0;
+    foreach ($players as $player) {
+        if ($n >= $limit) {
+            break;
+        }
+        if (!is_array($player)) {
+            continue;
+        }
+        $uid = trim((string) ($player['id'] ?? ''));
+        if ($uid === '' || preg_match('/^\d+$/', $uid) !== 1) {
+            continue;
+        }
+        $n++;
+        $row = [
+            'rank' => $player['rank'] ?? $n,
+            'id' => $uid,
+            'name' => $player['name'] ?? null,
+            'power' => isset($player['power']) ? (int) $player['power'] : null,
+            'alliance_tag' => $player['alliance_tag'] ?? null,
+            'stove_lv' => isset($player['stove_lv']) ? (int) $player['stove_lv'] : null,
+            'arena' => null,
+            'error' => null,
+        ];
+        try {
+            $arena = httpGetJsonAbsolute(
+                'https://api.wosatlas.com/v1/players/' . rawurlencode($uid) . '/arena',
+                $config
+            );
+            $row['arena'] = summarizeArenaInvestment($arena);
+        } catch (Throwable $e) {
+            $row['error'] = $e->getMessage();
+        }
+        $rows[] = $row;
+        usleep(80000);
+    }
+
+    return $rows;
+}
+
+/**
+ * Aggregate arena scout rows for one side.
+ *
+ * @param list<array<string, mixed>> $rows
+ * @return array<string, mixed>
+ */
+function aggregateArenaScout(array $rows): array
+{
+    $scores = [];
+    $stars = [];
+    $gear = [];
+    $exclusives = [];
+    $fullSkills = [];
+    $ok = 0;
+    $stale = 0;
+    $withheld = 0;
+
+    foreach ($rows as $row) {
+        $arena = is_array($row['arena'] ?? null) ? $row['arena'] : null;
+        if ($arena === null) {
+            continue;
+        }
+        $ok++;
+        if (!empty($arena['stale'])) {
+            $stale++;
+        }
+        if (!empty($arena['investment_withheld'])) {
+            $withheld++;
+        }
+        $scores[] = (int) ($arena['score'] ?? 0);
+        if (($arena['avg_star'] ?? null) !== null) {
+            $stars[] = (float) $arena['avg_star'];
+        }
+        if (($arena['avg_gear_slv'] ?? null) !== null) {
+            $gear[] = (float) $arena['avg_gear_slv'];
+        }
+        $exclusives[] = (int) ($arena['exclusive_count'] ?? 0);
+        $fullSkills[] = (int) ($arena['full_skills'] ?? 0);
+    }
+
+    $avg = static function (array $vals): ?float {
+        return $vals !== [] ? round(array_sum($vals) / count($vals), 2) : null;
+    };
+    $median = static function (array $vals): ?float {
+        if ($vals === []) {
+            return null;
+        }
+        sort($vals);
+        $c = count($vals);
+        $m = intdiv($c, 2);
+        return $c % 2 ? (float) $vals[$m] : round(($vals[$m - 1] + $vals[$m]) / 2, 2);
+    };
+
+    return [
+        'scouted' => count($rows),
+        'with_arena' => $ok,
+        'stale' => $stale,
+        'withheld' => $withheld,
+        'avg_score' => $avg($scores),
+        'median_score' => $median($scores),
+        'top_score' => $scores !== [] ? (int) max($scores) : null,
+        'avg_star' => $avg($stars),
+        'avg_gear_slv' => $avg($gear),
+        'avg_exclusives' => $avg($exclusives),
+        'avg_full_skills' => $avg($fullSkills),
+        'players' => $rows,
+    ];
+}
+
+/** Client IP for visit tracking (supports common proxy headers). */
+function visitorClientIp(): string
+{
+    $candidates = [
+        (string) ($_SERVER['HTTP_CF_CONNECTING_IP'] ?? ''),
+        (string) ($_SERVER['HTTP_X_FORWARDED_FOR'] ?? ''),
+        (string) ($_SERVER['REMOTE_ADDR'] ?? ''),
+    ];
+    foreach ($candidates as $raw) {
+        $raw = trim($raw);
+        if ($raw === '') {
+            continue;
+        }
+        // X-Forwarded-For may be a list; use the first hop.
+        if (str_contains($raw, ',')) {
+            $raw = trim(explode(',', $raw, 2)[0]);
+        }
+        if (filter_var($raw, FILTER_VALIDATE_IP)) {
+            return $raw;
+        }
+    }
+
+    return '0.0.0.0';
+}
+
+/** Stable visitor key derived from IP (not shown on public pages). */
+function visitorKeyFromIp(?string $ip = null): string
+{
+    $ip = $ip ?? visitorClientIp();
+    $salt = 'wostracker-site-visits-v1';
+    try {
+        $cfg = loadConfig();
+        $token = trim((string) ($cfg['update_token'] ?? ''));
+        if ($token !== '') {
+            $salt .= '|' . $token;
+        }
+    } catch (Throwable $e) {
+        // keep default salt
+    }
+
+    return hash('sha256', $salt . '|' . $ip);
+}
+
+/** Page key from current PHP script (e.g. index, state-4642, admin/visits). */
+function currentVisitPageKey(): string
+{
+    $script = str_replace('\\', '/', (string) ($_SERVER['SCRIPT_NAME'] ?? ''));
+    $script = trim($script, '/');
+    if ($script === '') {
+        return 'unknown';
+    }
+    if (str_ends_with(strtolower($script), '.php')) {
+        $script = substr($script, 0, -4);
+    }
+    // Drop leading path segments above the app root when hosted in a subfolder.
+    $parts = explode('/', $script);
+    $keep = [];
+    foreach ($parts as $part) {
+        if ($part === '' || $part === '.' || $part === '..') {
+            continue;
+        }
+        $keep[] = $part;
+    }
+    if ($keep === []) {
+        return 'unknown';
+    }
+    // Prefer last 2 segments so admin/visits stays distinct from visits.
+    if (count($keep) > 2) {
+        $keep = array_slice($keep, -2);
+    }
+    $key = implode('/', $keep);
+    if (strlen($key) > 64) {
+        $key = substr($key, 0, 64);
+    }
+
+    return $key !== '' ? $key : 'unknown';
+}
+
+/** Human-readable duration (e.g. 2h 15m). */
+function formatVisitDuration(int $seconds): string
+{
+    $seconds = max(0, $seconds);
+    if ($seconds < 60) {
+        return $seconds . 's';
+    }
+    $minutes = intdiv($seconds, 60);
+    $secs = $seconds % 60;
+    if ($minutes < 60) {
+        return $secs > 0 ? ($minutes . 'm ' . $secs . 's') : ($minutes . 'm');
+    }
+    $hours = intdiv($minutes, 60);
+    $mins = $minutes % 60;
+    if ($hours < 48) {
+        return $mins > 0 ? ($hours . 'h ' . $mins . 'm') : ($hours . 'h');
+    }
+    $days = intdiv($hours, 24);
+    $remHours = $hours % 24;
+
+    return $remHours > 0 ? ($days . 'd ' . $remHours . 'h') : ($days . 'd');
+}
+
+/**
+ * Build "City, Region, Country" label from geo parts.
+ *
+ * @param array{country?: ?string, region?: ?string, city?: ?string} $geo
+ */
+function formatVisitorGeoLabel(array $geo): string
+{
+    $parts = [];
+    foreach (['city', 'region', 'country'] as $field) {
+        $val = trim((string) ($geo[$field] ?? ''));
+        if ($val !== '' && !in_array($val, $parts, true)) {
+            $parts[] = $val;
+        }
+    }
+
+    return $parts !== [] ? implode(', ', $parts) : 'Unknown';
+}
+
+/**
+ * Resolve approximate location for a visitor IP via ip-api.com (cached per visitor key).
+ *
+ * @return array{country: ?string, region: ?string, city: ?string, geo_label: string, status: string, cached: bool}
+ */
+function resolveVisitorGeo(string $visitorKey, ?string $ip = null): array
+{
+    $ip = $ip ?? visitorClientIp();
+    $now = nowUtc();
+    $fallback = [
+        'country' => null,
+        'region' => null,
+        'city' => null,
+        'geo_label' => 'Unknown',
+        'status' => 'unknown',
+        'cached' => false,
+    ];
+
+    try {
+        // Cache hit (DB).
+        if (dbAvailable()) {
+            $pdo = db();
+            $stmt = $pdo->prepare(
+                'SELECT country, region, city, geo_label, status FROM visitor_geo_cache WHERE visitor_key = ? LIMIT 1'
+            );
+            $stmt->execute([$visitorKey]);
+            $cached = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (is_array($cached)) {
+                return [
+                    'country' => $cached['country'] !== null ? (string) $cached['country'] : null,
+                    'region' => $cached['region'] !== null ? (string) $cached['region'] : null,
+                    'city' => $cached['city'] !== null ? (string) $cached['city'] : null,
+                    'geo_label' => (string) ($cached['geo_label'] ?: 'Unknown'),
+                    'status' => (string) ($cached['status'] ?? 'ok'),
+                    'cached' => true,
+                ];
+            }
+        } else {
+            $cache = loadJson(SITE_GEO_CACHE_FILE, ['entries' => []]);
+            $entries = is_array($cache['entries'] ?? null) ? $cache['entries'] : [];
+            if (isset($entries[$visitorKey]) && is_array($entries[$visitorKey])) {
+                $cached = $entries[$visitorKey];
+
+                return [
+                    'country' => isset($cached['country']) ? (string) $cached['country'] : null,
+                    'region' => isset($cached['region']) ? (string) $cached['region'] : null,
+                    'city' => isset($cached['city']) ? (string) $cached['city'] : null,
+                    'geo_label' => (string) ($cached['geo_label'] ?? formatVisitorGeoLabel($cached)),
+                    'status' => (string) ($cached['status'] ?? 'ok'),
+                    'cached' => true,
+                ];
+            }
+        }
+
+        // Private / local addresses — never call the API.
+        if (
+            $ip === '' ||
+            $ip === '0.0.0.0' ||
+            !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)
+        ) {
+            $geo = [
+                'country' => null,
+                'region' => null,
+                'city' => null,
+                'geo_label' => 'Local / private network',
+                'status' => 'private',
+                'cached' => false,
+            ];
+            persistVisitorGeoCache($visitorKey, $ip, $geo, $now);
+
+            return $geo;
+        }
+
+        // Free tier of ip-api.com is HTTP-only and rate-limited (~45/min).
+        $url = 'http://ip-api.com/json/' . rawurlencode($ip)
+            . '?fields=status,message,country,regionName,city,query';
+        $payload = null;
+        if (function_exists('curl_init')) {
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => 3,
+                CURLOPT_CONNECTTIMEOUT => 2,
+                CURLOPT_USERAGENT => 'WOSTracker-geo/1.0',
+            ]);
+            $raw = curl_exec($ch);
+            curl_close($ch);
+            if (is_string($raw) && $raw !== '') {
+                $decoded = json_decode($raw, true);
+                if (is_array($decoded)) {
+                    $payload = $decoded;
+                }
+            }
+        } else {
+            $ctx = stream_context_create([
+                'http' => [
+                    'timeout' => 3,
+                    'header' => "User-Agent: WOSTracker-geo/1.0\r\n",
+                ],
+            ]);
+            $raw = @file_get_contents($url, false, $ctx);
+            if (is_string($raw) && $raw !== '') {
+                $decoded = json_decode($raw, true);
+                if (is_array($decoded)) {
+                    $payload = $decoded;
+                }
+            }
+        }
+
+        if (!is_array($payload) || ($payload['status'] ?? '') !== 'success') {
+            $geo = [
+                'country' => null,
+                'region' => null,
+                'city' => null,
+                'geo_label' => 'Lookup unavailable',
+                'status' => 'fail',
+                'cached' => false,
+            ];
+            // Cache failures briefly-as-permanent to avoid hammering the free API.
+            persistVisitorGeoCache($visitorKey, $ip, $geo, $now);
+
+            return $geo;
+        }
+
+        $geo = [
+            'country' => trim((string) ($payload['country'] ?? '')) ?: null,
+            'region' => trim((string) ($payload['regionName'] ?? '')) ?: null,
+            'city' => trim((string) ($payload['city'] ?? '')) ?: null,
+            'geo_label' => '',
+            'status' => 'ok',
+            'cached' => false,
+        ];
+        $geo['geo_label'] = formatVisitorGeoLabel($geo);
+        persistVisitorGeoCache($visitorKey, $ip, $geo, $now);
+
+        return $geo;
+    } catch (Throwable $e) {
+        return $fallback;
+    }
+}
+
+/**
+ * @param array{country: ?string, region: ?string, city: ?string, geo_label: string, status: string} $geo
+ */
+function persistVisitorGeoCache(string $visitorKey, string $ip, array $geo, string $now): void
+{
+    $ipHash = hash('sha256', $ip);
+    $country = $geo['country'] ?? null;
+    $region = $geo['region'] ?? null;
+    $city = $geo['city'] ?? null;
+    $label = (string) ($geo['geo_label'] ?? 'Unknown');
+    $status = (string) ($geo['status'] ?? 'ok');
+
+    if (dbAvailable()) {
+        $pdo = db();
+        $stmt = $pdo->prepare(
+            'INSERT INTO visitor_geo_cache
+                (visitor_key, ip_hash, country, region, city, geo_label, status, looked_up_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+                ip_hash = VALUES(ip_hash),
+                country = VALUES(country),
+                region = VALUES(region),
+                city = VALUES(city),
+                geo_label = VALUES(geo_label),
+                status = VALUES(status),
+                looked_up_at = VALUES(looked_up_at)'
+        );
+        $stmt->execute([$visitorKey, $ipHash, $country, $region, $city, $label, $status, $now]);
+        return;
+    }
+
+    $cache = loadJson(SITE_GEO_CACHE_FILE, ['entries' => []]);
+    if (!isset($cache['entries']) || !is_array($cache['entries'])) {
+        $cache['entries'] = [];
+    }
+    $cache['entries'][$visitorKey] = [
+        'ip_hash' => $ipHash,
+        'country' => $country,
+        'region' => $region,
+        'city' => $city,
+        'geo_label' => $label,
+        'status' => $status,
+        'looked_up_at' => $now,
+    ];
+    $cache['updated_at'] = $now;
+    saveJson(SITE_GEO_CACHE_FILE, $cache);
+}
+
+/**
+ * Record one site page hit + update visitor first/last activity.
+ * Silent on failure so tracking never breaks public pages.
+ *
+ * @return array{ok: bool}
+ */
+function recordSiteVisit(?string $pageKey = null): array
+{
+    if (PHP_SAPI === 'cli') {
+        return ['ok' => false];
+    }
+
+    $pageKey = trim((string) ($pageKey ?? currentVisitPageKey()));
+    if ($pageKey === '') {
+        $pageKey = 'unknown';
+    }
+    $ip = visitorClientIp();
+    $visitorKey = visitorKeyFromIp($ip);
+    $now = nowUtc();
+    $geo = resolveVisitorGeo($visitorKey, $ip);
+
+    try {
+        if (dbAvailable()) {
+            $pdo = db();
+            $hit = $pdo->prepare(
+                'INSERT INTO page_visits (page_key, visitor_key, visited_at) VALUES (?, ?, ?)'
+            );
+            $hit->execute([$pageKey, $visitorKey, $now]);
+
+            $upsert = $pdo->prepare(
+                'INSERT INTO visitor_activity
+                    (visitor_key, first_seen, last_seen, hit_count, ip_address,
+                     country, region, city, geo_label, geo_looked_up_at)
+                 VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE
+                    last_seen = VALUES(last_seen),
+                    hit_count = hit_count + 1,
+                    ip_address = VALUES(ip_address),
+                    country = COALESCE(VALUES(country), country),
+                    region = COALESCE(VALUES(region), region),
+                    city = COALESCE(VALUES(city), city),
+                    geo_label = COALESCE(VALUES(geo_label), geo_label),
+                    geo_looked_up_at = COALESCE(geo_looked_up_at, VALUES(geo_looked_up_at))'
+            );
+            $upsert->execute([
+                $visitorKey,
+                $now,
+                $now,
+                $ip,
+                $geo['country'],
+                $geo['region'],
+                $geo['city'],
+                $geo['geo_label'],
+                $now,
+            ]);
+
+            return ['ok' => true];
+        }
+
+        $store = loadJson(SITE_VISITS_FILE, ['pages' => [], 'visitors' => []]);
+        if (!is_array($store)) {
+            $store = ['pages' => [], 'visitors' => []];
+        }
+        if (!isset($store['pages']) || !is_array($store['pages'])) {
+            $store['pages'] = [];
+        }
+        if (!isset($store['visitors']) || !is_array($store['visitors'])) {
+            $store['visitors'] = [];
+        }
+
+        $page = is_array($store['pages'][$pageKey] ?? null) ? $store['pages'][$pageKey] : [];
+        $pageVisitors = is_array($page['visitors'] ?? null) ? $page['visitors'] : [];
+        $pageVisitors[$visitorKey] = (int) ($pageVisitors[$visitorKey] ?? 0) + 1;
+        $page['visitors'] = $pageVisitors;
+        $page['total'] = (int) ($page['total'] ?? 0) + 1;
+        $page['unique'] = count($pageVisitors);
+        $page['last_visit'] = $now;
+        $store['pages'][$pageKey] = $page;
+
+        $visitor = is_array($store['visitors'][$visitorKey] ?? null) ? $store['visitors'][$visitorKey] : [];
+        if (empty($visitor['first_seen'])) {
+            $visitor['first_seen'] = $now;
+        }
+        $visitor['last_seen'] = $now;
+        $visitor['hits'] = (int) ($visitor['hits'] ?? 0) + 1;
+        $visitor['ip_address'] = $ip;
+        if (empty($visitor['geo_label'])) {
+            $visitor['country'] = $geo['country'];
+            $visitor['region'] = $geo['region'];
+            $visitor['city'] = $geo['city'];
+            $visitor['geo_label'] = $geo['geo_label'];
+            $visitor['geo_looked_up_at'] = $now;
+        }
+        $store['visitors'][$visitorKey] = $visitor;
+        $store['updated_at'] = $now;
+        saveJson(SITE_VISITS_FILE, $store);
+
+        return ['ok' => true];
+    } catch (Throwable $e) {
+        return ['ok' => false];
+    }
+}
+
+/** @deprecated Use recordSiteVisit() */
+function recordPageVisit(string $pageKey = SVS_VISIT_PAGE_KEY): array
+{
+    return recordSiteVisit($pageKey);
+}
+
+/**
+ * @return array{total: int, unique: int, last_visit: ?string}
+ */
+function getPageVisitStats(string $pageKey = SVS_VISIT_PAGE_KEY): array
+{
+    $pageKey = trim($pageKey) !== '' ? trim($pageKey) : SVS_VISIT_PAGE_KEY;
+
+    try {
+        if (dbAvailable()) {
+            $pdo = db();
+            $totalStmt = $pdo->prepare('SELECT COUNT(*) FROM page_visits WHERE page_key = ?');
+            $totalStmt->execute([$pageKey]);
+            $total = (int) $totalStmt->fetchColumn();
+
+            $uniqueStmt = $pdo->prepare('SELECT COUNT(DISTINCT visitor_key) FROM page_visits WHERE page_key = ?');
+            $uniqueStmt->execute([$pageKey]);
+            $unique = (int) $uniqueStmt->fetchColumn();
+
+            $lastStmt = $pdo->prepare('SELECT MAX(visited_at) FROM page_visits WHERE page_key = ?');
+            $lastStmt->execute([$pageKey]);
+            $last = $lastStmt->fetchColumn();
+
+            return [
+                'total' => $total,
+                'unique' => $unique,
+                'last_visit' => $last !== false && $last !== null && $last !== '' ? (string) $last : null,
+            ];
+        }
+
+        $store = loadJson(SITE_VISITS_FILE, ['pages' => [], 'visitors' => []]);
+        $page = is_array($store['pages'][$pageKey] ?? null) ? $store['pages'][$pageKey] : [];
+        $visitors = is_array($page['visitors'] ?? null) ? $page['visitors'] : [];
+
+        return [
+            'total' => (int) ($page['total'] ?? 0),
+            'unique' => isset($page['unique']) ? (int) $page['unique'] : count($visitors),
+            'last_visit' => isset($page['last_visit']) ? (string) $page['last_visit'] : null,
+        ];
+    } catch (Throwable $e) {
+        return ['total' => 0, 'unique' => 0, 'last_visit' => null];
+    }
+}
+
+/**
+ * Full admin report: site totals, average/total time spent, per-visitor rows.
+ *
+ * @return array{
+ *   total_hits: int,
+ *   unique_visitors: int,
+ *   total_duration_seconds: int,
+ *   avg_duration_seconds: int,
+ *   last_visit: ?string,
+ *   storage: string,
+ *   visitors: list<array{
+ *     visitor_key: string,
+ *     visitor_label: string,
+ *     ip_address: string,
+ *     location: string,
+ *     country: ?string,
+ *     region: ?string,
+ *     city: ?string,
+ *     first_seen: string,
+ *     last_seen: string,
+ *     duration_seconds: int,
+ *     hits: int
+ *   }>,
+ *   pages: list<array{page_key: string, total: int, unique: int}>
+ * }
+ */
+function getSiteVisitReport(): array
+{
+    $empty = [
+        'total_hits' => 0,
+        'unique_visitors' => 0,
+        'total_duration_seconds' => 0,
+        'avg_duration_seconds' => 0,
+        'last_visit' => null,
+        'storage' => dbAvailable() ? 'MySQL' : 'JSON',
+        'visitors' => [],
+        'pages' => [],
+    ];
+
+    try {
+        $visitorRows = [];
+
+        if (dbAvailable()) {
+            $pdo = db();
+            $totalHits = (int) $pdo->query('SELECT COUNT(*) FROM page_visits')->fetchColumn();
+            $lastVisit = $pdo->query('SELECT MAX(visited_at) FROM page_visits')->fetchColumn();
+            $lastVisit = $lastVisit !== false && $lastVisit !== null && $lastVisit !== ''
+                ? (string) $lastVisit
+                : null;
+
+            $stmt = $pdo->query(
+                'SELECT visitor_key, ip_address, first_seen, last_seen, hit_count,
+                        country, region, city, geo_label
+                 FROM visitor_activity
+                 ORDER BY last_seen DESC'
+            );
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $first = (string) ($row['first_seen'] ?? '');
+                $last = (string) ($row['last_seen'] ?? '');
+                $firstTs = strtotime($first) ?: 0;
+                $lastTs = strtotime($last) ?: 0;
+                $key = (string) ($row['visitor_key'] ?? '');
+                $ipAddress = trim((string) ($row['ip_address'] ?? ''));
+                $location = trim((string) ($row['geo_label'] ?? ''));
+                if ($location === '') {
+                    $location = formatVisitorGeoLabel([
+                        'country' => $row['country'] ?? null,
+                        'region' => $row['region'] ?? null,
+                        'city' => $row['city'] ?? null,
+                    ]);
+                }
+                $visitorRows[] = [
+                    'visitor_key' => $key,
+                    'ip_address' => $ipAddress,
+                    'visitor_label' => $ipAddress !== '' ? $ipAddress : 'Unknown IP',
+                    'location' => $location,
+                    'country' => $row['country'] !== null ? (string) $row['country'] : null,
+                    'region' => $row['region'] !== null ? (string) $row['region'] : null,
+                    'city' => $row['city'] !== null ? (string) $row['city'] : null,
+                    'first_seen' => $first,
+                    'last_seen' => $last,
+                    'duration_seconds' => max(0, $lastTs - $firstTs),
+                    'hits' => (int) ($row['hit_count'] ?? 0),
+                ];
+            }
+
+            $pageStmt = $pdo->query(
+                'SELECT page_key,
+                        COUNT(*) AS total,
+                        COUNT(DISTINCT visitor_key) AS unique_visitors
+                 FROM page_visits
+                 GROUP BY page_key
+                 ORDER BY total DESC'
+            );
+            $pages = [];
+            foreach ($pageStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $pages[] = [
+                    'page_key' => (string) ($row['page_key'] ?? ''),
+                    'total' => (int) ($row['total'] ?? 0),
+                    'unique' => (int) ($row['unique_visitors'] ?? 0),
+                ];
+            }
+
+            $storage = 'MySQL (page_visits + visitor_activity)';
+        } else {
+            $store = loadJson(SITE_VISITS_FILE, ['pages' => [], 'visitors' => []]);
+            $visitors = is_array($store['visitors'] ?? null) ? $store['visitors'] : [];
+            $pagesRaw = is_array($store['pages'] ?? null) ? $store['pages'] : [];
+
+            $totalHits = 0;
+            $lastVisit = null;
+            $lastVisitTs = 0;
+            foreach ($pagesRaw as $pageKey => $page) {
+                if (!is_array($page)) {
+                    continue;
+                }
+                $totalHits += (int) ($page['total'] ?? 0);
+                $pageLast = (string) ($page['last_visit'] ?? '');
+                $ts = $pageLast !== '' ? (strtotime($pageLast) ?: 0) : 0;
+                if ($ts > $lastVisitTs) {
+                    $lastVisitTs = $ts;
+                    $lastVisit = $pageLast;
+                }
+            }
+
+            foreach ($visitors as $key => $visitor) {
+                if (!is_array($visitor)) {
+                    continue;
+                }
+                $first = (string) ($visitor['first_seen'] ?? '');
+                $last = (string) ($visitor['last_seen'] ?? $first);
+                $firstTs = strtotime($first) ?: 0;
+                $lastTs = strtotime($last) ?: 0;
+                $keyStr = (string) $key;
+                $ipAddress = trim((string) ($visitor['ip_address'] ?? ''));
+                $location = trim((string) ($visitor['geo_label'] ?? ''));
+                if ($location === '') {
+                    $location = formatVisitorGeoLabel([
+                        'country' => $visitor['country'] ?? null,
+                        'region' => $visitor['region'] ?? null,
+                        'city' => $visitor['city'] ?? null,
+                    ]);
+                }
+                $visitorRows[] = [
+                    'visitor_key' => $keyStr,
+                    'ip_address' => $ipAddress,
+                    'visitor_label' => $ipAddress !== '' ? $ipAddress : 'Unknown IP',
+                    'location' => $location,
+                    'country' => isset($visitor['country']) ? (string) $visitor['country'] : null,
+                    'region' => isset($visitor['region']) ? (string) $visitor['region'] : null,
+                    'city' => isset($visitor['city']) ? (string) $visitor['city'] : null,
+                    'first_seen' => $first,
+                    'last_seen' => $last,
+                    'duration_seconds' => max(0, $lastTs - $firstTs),
+                    'hits' => (int) ($visitor['hits'] ?? 0),
+                ];
+            }
+            usort(
+                $visitorRows,
+                static fn(array $a, array $b): int => strcmp((string) $b['last_seen'], (string) $a['last_seen'])
+            );
+
+            $pages = [];
+            foreach ($pagesRaw as $pageKey => $page) {
+                if (!is_array($page)) {
+                    continue;
+                }
+                $pageVisitors = is_array($page['visitors'] ?? null) ? $page['visitors'] : [];
+                $pages[] = [
+                    'page_key' => (string) $pageKey,
+                    'total' => (int) ($page['total'] ?? 0),
+                    'unique' => isset($page['unique']) ? (int) $page['unique'] : count($pageVisitors),
+                ];
+            }
+            usort($pages, static fn(array $a, array $b): int => $b['total'] <=> $a['total']);
+
+            $storage = 'JSON file (data/site-visits.json)';
+        }
+
+        $unique = count($visitorRows);
+        $totalDuration = 0;
+        foreach ($visitorRows as $row) {
+            $totalDuration += (int) ($row['duration_seconds'] ?? 0);
+        }
+        $avgDuration = $unique > 0 ? (int) round($totalDuration / $unique) : 0;
+
+        return [
+            'total_hits' => $totalHits ?? 0,
+            'unique_visitors' => $unique,
+            'total_duration_seconds' => $totalDuration,
+            'avg_duration_seconds' => $avgDuration,
+            'last_visit' => $lastVisit,
+            'storage' => $storage,
+            'visitors' => $visitorRows,
+            'pages' => $pages,
+        ];
+    } catch (Throwable $e) {
+        return $empty;
+    }
+}
+
+/**
+ * Load cached Arena/gear scout for SvS page (top N each side).
+ *
+ * @param list<array<string, mixed>> $ourPlayers
+ * @param list<array<string, mixed>> $theirPlayers
+ * @return array{
+ *   fetched_at: string,
+ *   source: string,
+ *   error: ?string,
+ *   us: array<string, mixed>,
+ *   them: array<string, mixed>
+ * }
+ */
+function loadSvsArenaComparison(
+    array $ourPlayers,
+    array $theirPlayers,
+    bool $forceRefresh = false,
+    int $limit = SVS_ARENA_SCOUT_LIMIT
+): array {
+    $cache = loadJson(SVS_ARENA_CACHE_FILE, null);
+    $fresh = false;
+    if (is_array($cache) && !$forceRefresh) {
+        $fetchedAt = strtotime((string) ($cache['fetched_at'] ?? '')) ?: 0;
+        if ($fetchedAt > 0 && (time() - $fetchedAt) < SVS_ARENA_CACHE_TTL) {
+            $fresh = true;
+        }
+    }
+
+    if ($fresh && is_array($cache)) {
+        return [
+            'fetched_at' => (string) ($cache['fetched_at'] ?? ''),
+            'source' => 'cache',
+            'error' => null,
+            'us' => is_array($cache['us'] ?? null) ? $cache['us'] : aggregateArenaScout([]),
+            'them' => is_array($cache['them'] ?? null) ? $cache['them'] : aggregateArenaScout([]),
+        ];
+    }
+
+    try {
+        $config = loadConfig();
+        $ourRows = fetchArenaScoutRows(rankPlayersByPower($ourPlayers), $config, $limit);
+        $theirRows = fetchArenaScoutRows(rankPlayersByPower($theirPlayers), $config, $limit);
+        $payload = [
+            'fetched_at' => nowUtc(),
+            'limit' => $limit,
+            'us' => aggregateArenaScout($ourRows),
+            'them' => aggregateArenaScout($theirRows),
+        ];
+        saveJson(SVS_ARENA_CACHE_FILE, $payload);
+
+        return [
+            'fetched_at' => $payload['fetched_at'],
+            'source' => 'live',
+            'error' => null,
+            'us' => $payload['us'],
+            'them' => $payload['them'],
+        ];
+    } catch (Throwable $e) {
+        if (is_array($cache) && is_array($cache['us'] ?? null)) {
+            return [
+                'fetched_at' => (string) ($cache['fetched_at'] ?? ''),
+                'source' => 'stale-cache',
+                'error' => $e->getMessage(),
+                'us' => $cache['us'],
+                'them' => is_array($cache['them'] ?? null) ? $cache['them'] : aggregateArenaScout([]),
+            ];
+        }
+
+        return [
+            'fetched_at' => '',
+            'source' => 'error',
+            'error' => $e->getMessage(),
+            'us' => aggregateArenaScout([]),
+            'them' => aggregateArenaScout([]),
+        ];
+    }
 }
 
 

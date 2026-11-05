@@ -289,9 +289,9 @@ function formatSignedPower(?int $value): string
                                     <td data-label="B"><strong><?= h((string) ($whalesB['whale_count'] ?? 0)) ?></strong><?php if (($whalesB['known_count'] ?? 0) > 0): ?> <span class="muted">/ <?= (int) $whalesB['known_count'] ?> known</span><?php endif; ?></td>
                                 </tr>
                                 <tr>
-                                    <td data-label="Metric">Threat score</td>
-                                    <td data-label="A" class="ratio-cell <?= h(threatRatioClass($threatA['score'] ?? null)) ?>" title="<?= h(formatThreatRatioTooltip($threatA['metrics'] ?? null)) ?>"><?= h(formatTopHeavyRatio($threatA['score'] ?? null)) ?></td>
-                                    <td data-label="B" class="ratio-cell <?= h(threatRatioClass($threatB['score'] ?? null)) ?>" title="<?= h(formatThreatRatioTooltip($threatB['metrics'] ?? null)) ?>"><?= h(formatTopHeavyRatio($threatB['score'] ?? null)) ?></td>
+                                    <td data-label="Metric">Threat score (top 10 power)</td>
+                                    <td data-label="A" class="ratio-cell <?= h(threatRatioClass($threatA['score'] ?? null)) ?>" title="<?= h(formatThreatRatioTooltip($threatA['metrics'] ?? null)) ?>"><?= h(formatThreatScore($threatA['score'] ?? null)) ?></td>
+                                    <td data-label="B" class="ratio-cell <?= h(threatRatioClass($threatB['score'] ?? null)) ?>" title="<?= h(formatThreatRatioTooltip($threatB['metrics'] ?? null)) ?>"><?= h(formatThreatScore($threatB['score'] ?? null)) ?></td>
                                 </tr>
                                 <tr>
                                     <td data-label="Metric">Threat rank</td>

@@ -16,7 +16,7 @@ const MAX_NICK = 20;
 const MIN_NICK = 2;
 const RATE_MS = 1500;
 const HISTORY_LIMIT = 120;
-const MAX_IMAGE_BYTES = 512 * 1024;
+const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 
 const els = {
     root: document.getElementById("live-chat"),
@@ -207,7 +207,7 @@ function bootChat() {
             return;
         }
         if (file.size <= 0 || file.size > MAX_IMAGE_BYTES) {
-            setStatus("Image must be 512 KB or smaller.", true);
+            setStatus("Image must be 12 MB or smaller.", true);
             return;
         }
         clearPendingImage();
@@ -345,7 +345,7 @@ function bootChat() {
             }
             lastSentAt = 0;
             setStatus(error?.message || explainFirebaseError(error), true);
-            if (!String(error?.message || "").includes("512") && !String(error?.message || "").includes("Image")) {
+            if (!String(error?.message || "").includes("12 MB") && !String(error?.message || "").includes("Image")) {
                 showSetup(true);
             }
         } finally {

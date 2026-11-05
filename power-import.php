@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 /**
- * Import roster powers JSON (from Atlas console export while signed in).
+ * Import roster powers JSON (from Atlas console export).
+ * NOTE: enrich-roster-powers.php now gets the same data server-side from Atlas v2
+ * (/players/{uid}), so this console flow is optional.
  *
  * POST JSON:
  *   { "aid": "4627000048", "token": "...", "players": { "2091…": { "power": 123, ... } } }
@@ -61,14 +63,14 @@ try {
 
         $uidsJson = json_encode($uids, JSON_UNESCAPED_UNICODE);
         $endpoint = json_encode(
-            'https://state4627.btkdeals.com/power-import.php',
+            'https://wostracker.online/power-import.php',
             JSON_UNESCAPED_UNICODE
         );
         $aidJson = json_encode($aid, JSON_UNESCAPED_UNICODE);
         $tokenJson = json_encode($token, JSON_UNESCAPED_UNICODE);
 
         echo <<<JS
-/* Paste this into the browser console on https://wosatlas.com while signed in */
+/* Paste this into the browser console on https://wosatlas.com (no sign-in needed) */
 (async () => {
   const uids = {$uidsJson};
   const endpoint = {$endpoint};
@@ -79,21 +81,20 @@ try {
   for (let i = 0; i < uids.length; i++) {
     const uid = uids[i];
     try {
-      const res = await fetch('https://api.wosatlas.com/v1/players/search?playerName=' + encodeURIComponent(uid), {
-        credentials: 'include',
+      // WOS Atlas v2 public API (v1 api.wosatlas.com is retired). No sign-in needed.
+      const res = await fetch('/api/v1/players/' + encodeURIComponent(uid), {
         headers: { 'Accept': 'application/json' },
       });
-      const data = await res.json();
-      const p = (data.players || []).find(x => String(x.uid) === String(uid)) || (data.players || [])[0] || {};
+      const p = res.ok ? await res.json() : {};
       players[uid] = {
         id: String(uid),
-        name: p.nick_name || p.nickName || null,
-        power: p.current_power ?? p.currentPower ?? p.power ?? null,
-        stove_lv: p.stove_lv ?? p.furnace_lv ?? p.stoveLv ?? p.furnaceLv ?? null,
-        last_jump_pct: p.last_jump_pct ?? p.lastJumpPct ?? null,
+        name: p.name || null,
+        power: p.power ?? null,
+        stove_lv: p.hq_level ?? null,
+        last_jump_pct: null,
         fetched_at: new Date().toISOString().slice(0, 19).replace('T', ' '),
         source: 'atlas-console',
-        viewer_tier: data.viewerTier || null,
+        viewer_tier: res.headers.get('x-tier') || null,
       };
     } catch (err) {
       console.warn('fail', uid, err);

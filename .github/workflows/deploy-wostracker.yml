@@ -1,4 +1,4 @@
-name: Deploy state4627 to Hostinger
+name: Deploy wostracker.online to Hostinger
 
 on:
   workflow_dispatch:
@@ -7,18 +7,18 @@ on:
       - main
 
 concurrency:
-  group: deploy-state4627
+  group: deploy-wostracker
   cancel-in-progress: true
 
 env:
   HOSTINGER_SSH_HOST: 157.173.209.199
   HOSTINGER_SSH_USER: u229715236
   HOSTINGER_SSH_PORT: 65002
-  HOSTINGER_DEPLOY_PATH: domains/btkdeals.com/public_html/state4627
+  HOSTINGER_DEPLOY_PATH: domains/wostracker.online/public_html
 
 jobs:
   deploy:
-    name: Deploy to state4627.btkdeals.com
+    name: Deploy to wostracker.online
     runs-on: ubuntu-latest
 
     steps:
@@ -27,8 +27,8 @@ jobs:
 
       - name: Validate deploy path
         run: |
-          if [[ "${HOSTINGER_DEPLOY_PATH}" != *state4627* ]]; then
-            echo "Refusing to deploy: path must contain state4627"
+          if [[ "${HOSTINGER_DEPLOY_PATH}" != *wostracker.online* ]]; then
+            echo "Refusing to deploy: path must contain wostracker.online"
             exit 1
           fi
 
@@ -48,7 +48,7 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           if ! grep -q 'BEGIN OPENSSH PRIVATE KEY' ~/.ssh/deploy_key; then
-            echo "Invalid HOSTINGER_SSH_PRIVATE_KEY: must include BEGIN/END lines and line breaks"
+            echo "Invalid HOSTINGER_SSH_PRIVATE_KEY: include BEGIN/END lines and line breaks"
             exit 1
           fi
           chmod 600 ~/.ssh/deploy_key
@@ -71,46 +71,72 @@ jobs:
             }
           fi
           ssh-add -l
+          # Persist agent for later steps
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
 
       - name: Ensure remote directory exists
         run: |
           ssh -o StrictHostKeyChecking=accept-new -p "$HOSTINGER_SSH_PORT" \
             "${HOSTINGER_SSH_USER}@${HOSTINGER_SSH_HOST}" \
-            "mkdir -p '${HOSTINGER_DEPLOY_PATH}/data'"
+            "mkdir -p '${HOSTINGER_DEPLOY_PATH}/data' '${HOSTINGER_DEPLOY_PATH}/uploads'"
 
-      - name: Rsync application (state4627 only)
+      - name: Rsync application (preserve server-only files; no --delete)
         run: |
-          rsync -avz --delete \
+          # Intentionally NO --delete so server-only runtime files survive.
+          # Also exclude secrets / runtime / VCS so we never overwrite them.
+          rsync -avz \
             -e "ssh -p ${HOSTINGER_SSH_PORT} -o StrictHostKeyChecking=accept-new" \
             --exclude '.git/' \
             --exclude '.github/' \
             --exclude 'config.json' \
-            --exclude 'data/alliances.json' \
-            --exclude 'data/history.json' \
+            --exclude 'error_log' \
+            --exclude 'ssh.txt' \
+            --exclude '.env' \
+            --exclude '.env.*' \
+            --exclude 'data/*.json' \
+            --exclude 'data/*.log' \
+            --exclude 'data/*.lock' \
             --exclude 'data/*.tmp' \
+            --exclude 'data/atlas-cookies.txt' \
+            --exclude 'data/rosters/' \
+            --exclude 'data/roster-imports/' \
+            --exclude 'data/roster-powers/' \
+            --exclude 'data/atlas-v2/' \
+            --exclude 'data/svs-*' \
+            --exclude 'data/site-visits.json' \
+            --exclude 'uploads/video/*' \
+            --exclude 'uploads/chat/*' \
+            --exclude 'uploads/incidents/*' \
+            --exclude 'uploads/cache/' \
             --exclude 'Requirements.md' \
             --exclude 'deploy.sh' \
             --exclude 'scripts/' \
             --exclude 'ssh.txt.example' \
             --include 'uploads/video/.htaccess' \
-            --exclude 'uploads/video/*' \
+            --include 'uploads/chat/.htaccess' \
+            --include 'uploads/incidents/.htaccess' \
+            --include 'data/.htaccess' \
             ./ "${HOSTINGER_SSH_USER}@${HOSTINGER_SSH_HOST}:${HOSTINGER_DEPLOY_PATH}/"
 
-      - name: Post-deploy server setup
+      - name: Post-deploy permissions (no config rewrite)
         run: |
           ssh -p "$HOSTINGER_SSH_PORT" -o StrictHostKeyChecking=accept-new \
             "${HOSTINGER_SSH_USER}@${HOSTINGER_SSH_HOST}" \
             "cd '${HOSTINGER_DEPLOY_PATH}' && \
-             mkdir -p data && chmod 755 data && \
+             mkdir -p data uploads/video uploads/chat uploads/incidents && \
+             chmod 755 data uploads && \
              if [ ! -f config.json ]; then \
-               TOKEN=\$(php -r 'echo bin2hex(random_bytes(16));'); \
-               printf '%s\n' \"{\\\"state_id\\\":\\\"4627\\\",\\\"state_name\\\":\\\"State 4627\\\",\\\"api_url\\\":\\\"\\\",\\\"api_key\\\":\\\"\\\",\\\"update_token\\\":\\\"\$TOKEN\\\",\\\"sample_mode\\\":false,\\\"nap_alliances\\\":[]}\" > config.json; \
-               chmod 600 config.json; \
-             fi && \
-             [ -f data/alliances.json ] || echo '[]' > data/alliances.json && \
-             [ -f data/history.json ] || echo '[]' > data/history.json"
+               echo 'WARNING: config.json missing on server — create it before relying on NAP/admin features'; \
+             fi"
 
       - name: Smoke test
         run: |
-          curl -fsS --retry 5 --retry-delay 5 "https://state4627.btkdeals.com/" | tee /tmp/home.html
-          grep -qi 'whiteout\|alliance\|set to go' /tmp/home.html
+          set -e
+          code_home=$(curl -sS -o /tmp/wost-home.html -w '%{http_code}' --retry 5 --retry-delay 5 "https://wostracker.online/")
+          code_players=$(curl -sS -o /tmp/wost-players.html -w '%{http_code}' --retry 5 --retry-delay 5 "https://wostracker.online/players.php")
+          echo "GET / -> ${code_home}"
+          echo "GET /players.php -> ${code_players}"
+          test "${code_home}" = "200"
+          test "${code_players}" = "200"
+          grep -qi 'whiteout\|alliance\|player\|wos' /tmp/wost-home.html

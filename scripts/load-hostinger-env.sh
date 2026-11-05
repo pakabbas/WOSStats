@@ -71,8 +71,8 @@ chmod 600 "${HOSTINGER_SSH_KEY}" 2>/dev/null || true
 : "${HOSTINGER_SSH_USER:?HOSTINGER_SSH_USER missing in ssh.txt}"
 : "${HOSTINGER_DEPLOY_PATH:?HOSTINGER_DEPLOY_PATH missing in ssh.txt}"
 
-if [[ "${HOSTINGER_DEPLOY_PATH}" != *state4627* ]]; then
-    echo "Warning: deploy path does not contain state4627: ${HOSTINGER_DEPLOY_PATH}" >&2
+if [[ "${HOSTINGER_DEPLOY_PATH}" != *wostracker.online* ]]; then
+    echo "Warning: deploy path does not contain wostracker.online: ${HOSTINGER_DEPLOY_PATH}" >&2
 fi
 
 echo "Loaded Hostinger env for ${HOSTINGER_SSH_USER}@${HOSTINGER_SSH_HOST}:${HOSTINGER_SSH_PORT}"

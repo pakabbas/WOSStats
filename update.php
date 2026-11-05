@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/functions.php';
-require_once __DIR__ . '/collector.php';
+require_once __DIR__ . '/collector.php'; // also loads atlas_v2.php
 
 header('Content-Type: text/plain; charset=utf-8');
 
@@ -49,6 +49,53 @@ try {
         $players = $floored['players'];
         $powerRaised = $floored['power_raised'];
         $powerKept = $floored['power_kept'];
+
+        // Atlas v2 only exposes ~top 20 per board / per alliance, so its list is partial.
+        // MERGE into the existing board (same policy as api/updatePower.php) instead of replacing it.
+        if (atlasV2Enabled($config)) {
+            $incomingById = [];
+            $incomingByName = [];
+            foreach ($players as $row) {
+                if (is_array($row) && !empty($row['id'])) {
+                    $incomingById[(string) $row['id']] = true;
+                }
+                if (is_array($row) && !empty($row['name'])) {
+                    $incomingByName[normalizePlayerNameKey($row['name'])] = true;
+                }
+            }
+            $existingById = [];
+            foreach ($existingPlayers as $prev) {
+                if (is_array($prev) && !empty($prev['id'])) {
+                    $existingById[(string) $prev['id']] = $prev;
+                }
+            }
+            foreach ($players as &$row) {
+                $prev = $existingById[(string) ($row['id'] ?? '')] ?? null;
+                if ($prev === null) {
+                    continue;
+                }
+                foreach (['stove_lv', 'last_jump_pct'] as $keep) {
+                    if (($row[$keep] ?? null) === null && ($prev[$keep] ?? null) !== null) {
+                        $row[$keep] = $prev[$keep];
+                    }
+                }
+            }
+            unset($row);
+            foreach ($existingPlayers as $prev) {
+                if (!is_array($prev)) {
+                    continue;
+                }
+                $id = (string) ($prev['id'] ?? '');
+                if ($id !== '' && isset($incomingById[$id])) {
+                    continue;
+                }
+                if ($id === '' && isset($incomingByName[normalizePlayerNameKey($prev['name'] ?? '')])) {
+                    continue; // name-only row already matched by applyNeverDecreasePlayerPower
+                }
+                $players[] = $prev; // not visible in v2 this run → keep last known row
+            }
+            $players = limitPlayersToTop(rankPlayersByPower($players));
+        }
         validatePlayers($players);
         $alliances = enrichAlliancesMaxPowerFromPlayers($alliances, $players);
     }

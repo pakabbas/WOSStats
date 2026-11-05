@@ -1,6 +1,6 @@
 const MAX_TEXT = 300;
 const RATE_MS = 1200;
-const MAX_IMAGE_BYTES = 512 * 1024;
+const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 const POLL_MS = 2500;
 
 const els = {
@@ -8,11 +8,20 @@ const els = {
     authBox: document.getElementById("users-auth-box"),
     signedIn: document.getElementById("users-signed-in"),
     googleHost: document.getElementById("users-google-btn-host"),
+    localLoginForm: document.getElementById("users-local-login"),
+    localUsername: document.getElementById("users-local-username"),
+    localPassword: document.getElementById("users-local-password"),
     signOutBtn: document.getElementById("users-signout"),
     authStatus: document.getElementById("users-auth-status"),
     mePhoto: document.getElementById("users-me-photo"),
     meName: document.getElementById("users-me-name"),
+    meNameRow: document.getElementById("users-me-name-row"),
     meEmail: document.getElementById("users-me-email"),
+    editNameBtn: document.getElementById("users-edit-name"),
+    nameForm: document.getElementById("users-name-form"),
+    nameInput: document.getElementById("users-name-input"),
+    nameCancel: document.getElementById("users-name-cancel"),
+    nameStatus: document.getElementById("users-name-status"),
     search: document.getElementById("users-search"),
     list: document.getElementById("users-list"),
     dmEmpty: document.getElementById("users-dm-empty"),
@@ -40,6 +49,7 @@ if (els.app) {
 function bootUsers() {
     const clientId = els.app.getAttribute("data-google-client-id") || "";
     let currentUser = null;
+    let isAdmin = els.app.getAttribute("data-boot-is-admin") === "1";
     let users = [];
     let searchTerm = "";
     let peer = null;
@@ -74,14 +84,26 @@ function bootUsers() {
             body: JSON.stringify({ action: "logout" }),
         });
         currentUser = null;
+        isAdmin = false;
         showSignedOut();
         setAuthStatus("");
-        renderGoogleButton();
+    });
+
+    els.localLoginForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        await handleLocalLogin();
     });
 
     els.search?.addEventListener("input", () => {
         searchTerm = String(els.search.value || "").trim().toLowerCase();
         renderUserList();
+    });
+
+    els.editNameBtn?.addEventListener("click", () => openNameEditor());
+    els.nameCancel?.addEventListener("click", () => closeNameEditor(false));
+    els.nameForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        await saveDisplayName();
     });
 
     els.dmBack?.addEventListener("click", () => {
@@ -135,6 +157,39 @@ function bootUsers() {
                 throw new Error(data?.error || "Sign-in failed.");
             }
             currentUser = data.user;
+            isAdmin = Boolean(data.is_admin);
+            showSignedIn(currentUser);
+            setAuthStatus("");
+            await loadUsers();
+        } catch (err) {
+            setAuthStatus(err?.message || "Sign-in failed.", true);
+            renderGoogleButton();
+        }
+    }
+
+    async function handleLocalLogin() {
+        const username = String(els.localUsername?.value || "").trim();
+        const password = String(els.localPassword?.value || "");
+        if (!username || !password) {
+            setAuthStatus("Enter username and password.", true);
+            return;
+        }
+        setAuthStatus("Signing in…");
+        try {
+            const res = await fetch("auth-local.php", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Accept: "application/json" },
+                body: JSON.stringify({ username, password }),
+            });
+            const data = await res.json().catch(() => null);
+            if (!data?.ok || !data.user) {
+                throw new Error(data?.error || "Sign-in failed.");
+            }
+            currentUser = data.user;
+            isAdmin = Boolean(data.is_admin);
+            if (els.localPassword) {
+                els.localPassword.value = "";
+            }
             showSignedIn(currentUser);
             setAuthStatus("");
             await loadUsers();
@@ -149,12 +204,15 @@ function bootUsers() {
             const data = await res.json();
             if (data?.ok && data.user) {
                 currentUser = data.user;
+                isAdmin = Boolean(data.is_admin);
                 showSignedIn(currentUser);
                 await loadUsers();
             } else {
+                currentUser = null;
                 showSignedOut();
             }
         } catch {
+            currentUser = null;
             showSignedOut();
         }
     }
@@ -169,6 +227,7 @@ function bootUsers() {
             if (!data?.ok) {
                 throw new Error(data?.error || "Could not load users.");
             }
+            isAdmin = Boolean(data.is_admin);
             users = Array.isArray(data.users) ? data.users : [];
             renderUserList();
         } catch (err) {
@@ -186,7 +245,9 @@ function bootUsers() {
             if (!searchTerm) {
                 return true;
             }
-            const hay = `${u.display_name || ""} ${u.email || ""}`.toLowerCase();
+            const hay = isAdmin
+                ? `${u.display_name || ""} ${u.email || ""}`.toLowerCase()
+                : `${u.display_name || ""}`.toLowerCase();
             return hay.includes(searchTerm);
         });
 
@@ -201,11 +262,14 @@ function bootUsers() {
                 const photo = u.photo_url
                     ? `<img class="users-avatar users-avatar-sm" src="${escapeAttr(u.photo_url)}" alt="">`
                     : `<span class="users-avatar users-avatar-sm users-avatar-fallback">${escapeHtml(initials(u.display_name))}</span>`;
+                const sub = isAdmin && u.email
+                    ? `<span class="muted">${escapeHtml(u.email)}</span>`
+                    : "";
                 return `<button type="button" class="users-list-item${active}" data-uid="${escapeAttr(u.id)}">
                     ${photo}
                     <span class="users-list-item-meta">
                         <strong>${escapeHtml(u.display_name || "User")}</strong>
-                        <span class="muted">${escapeHtml(u.email || "")}</span>
+                        ${sub}
                     </span>
                 </button>`;
             })
@@ -222,6 +286,77 @@ function bootUsers() {
         });
     }
 
+    function openNameEditor() {
+        if (!currentUser || !els.nameForm || !els.nameInput) {
+            return;
+        }
+        if (els.meNameRow) {
+            els.meNameRow.hidden = true;
+        }
+        els.nameForm.hidden = false;
+        els.nameInput.value = currentUser.display_name || "";
+        els.nameInput.focus();
+        els.nameInput.select();
+        setNameStatus("");
+    }
+
+    function closeNameEditor(keepStatus) {
+        if (els.nameForm) {
+            els.nameForm.hidden = true;
+        }
+        if (els.meNameRow) {
+            els.meNameRow.hidden = false;
+        }
+        if (!keepStatus) {
+            setNameStatus("");
+        }
+    }
+
+    async function saveDisplayName() {
+        if (!currentUser || !els.nameInput) {
+            return;
+        }
+        const name = String(els.nameInput.value || "").trim();
+        if (name.length < 2) {
+            setNameStatus("Name must be at least 2 characters.", true);
+            return;
+        }
+        setNameStatus("Saving…");
+        try {
+            const res = await fetch("users-api.php?action=rename", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Accept: "application/json" },
+                body: JSON.stringify({ display_name: name }),
+            });
+            const data = await res.json();
+            if (!data?.ok || !data.user) {
+                throw new Error(data?.error || "Could not update name.");
+            }
+            currentUser = data.user;
+            showSignedIn(currentUser);
+            closeNameEditor(true);
+            setNameStatus("Name updated.");
+            window.setTimeout(() => setNameStatus(""), 2000);
+        } catch (err) {
+            setNameStatus(err?.message || "Could not update name.", true);
+        }
+    }
+
+    function setNameStatus(message, isError) {
+        if (!els.nameStatus) {
+            return;
+        }
+        if (!message) {
+            els.nameStatus.hidden = true;
+            els.nameStatus.textContent = "";
+            els.nameStatus.classList.remove("is-error");
+            return;
+        }
+        els.nameStatus.hidden = false;
+        els.nameStatus.textContent = message;
+        els.nameStatus.classList.toggle("is-error", Boolean(isError));
+    }
+
     async function openDm(user) {
         peer = user;
         document.body.classList.add("users-dm-open");
@@ -235,7 +370,7 @@ function bootUsers() {
             els.dmName.textContent = user.display_name || "User";
         }
         if (els.dmSub) {
-            els.dmSub.textContent = user.email || "Private message";
+            els.dmSub.textContent = isAdmin && user.email ? user.email : "Private message";
         }
         if (els.dmPhoto) {
             if (user.photo_url) {
@@ -399,7 +534,7 @@ function bootUsers() {
             return;
         }
         if (file.size > MAX_IMAGE_BYTES) {
-            setDmStatus("Image must be 512 KB or smaller.", true);
+            setDmStatus("Image must be 12 MB or smaller.", true);
             return;
         }
         clearPendingImage();
@@ -464,12 +599,12 @@ function bootUsers() {
         if (els.signOutBtn) {
             els.signOutBtn.hidden = true;
         }
-        if (els.googleHost) {
-            els.googleHost.innerHTML = "";
-        }
         if (els.list) {
             els.list.innerHTML = `<p class="chat-empty">Sign in to see users.</p>`;
         }
+        // Re-render Google button after session check. Clearing without re-render
+        // was making the button vanish on mobile/desktop after ~1s.
+        renderGoogleButton();
     }
 
     function showSignedIn(user) {
@@ -489,8 +624,15 @@ function bootUsers() {
         if (els.meName) {
             els.meName.textContent = user.display_name || "User";
         }
+        if (els.editNameBtn) {
+            els.editNameBtn.hidden = false;
+        }
+        if (els.nameInput) {
+            els.nameInput.value = user.display_name || "";
+        }
         if (els.meEmail) {
-            els.meEmail.textContent = user.email || "";
+            // Own email / username only — other users' emails are admin-only in the list/API.
+            els.meEmail.textContent = user.email || user.username || "";
         }
         if (els.mePhoto) {
             if (user.photo_url) {

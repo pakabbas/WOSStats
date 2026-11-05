@@ -79,6 +79,8 @@
 
     const playerTable = document.getElementById('player-table');
     const playerSearch = document.getElementById('player-search');
+    const playerAllianceFilter = document.getElementById('player-alliance-filter');
+    const playerFilterCount = document.getElementById('player-filter-count');
 
     function applyPlayerFilter() {
         if (!playerTable) {
@@ -86,14 +88,227 @@
         }
 
         const query = (playerSearch?.value || '').trim().toLowerCase();
+        const alliance = (playerAllianceFilter?.value || '').trim().toLowerCase();
+        const allianceFilterActive = alliance !== '';
+        // When filtering by alliance, only use top 100 of the board (not full 200).
+        const maxRankWhenAllianceFiltered = 100;
+        let visible = 0;
+        let total = 0;
+
         playerTable.querySelectorAll('tbody tr[data-name]').forEach((row) => {
+            total += 1;
             const name = row.dataset.name || '';
             const id = row.dataset.id || '';
-            row.hidden = !(!query || name.includes(query) || id.includes(query));
+            const tag = (row.dataset.tag || '').trim().toLowerCase();
+            const rank = parseInt(row.dataset.rank || '0', 10) || 0;
+            const matchesSearch = !query || name.includes(query) || id.includes(query) || tag.includes(query);
+            let matchesAlliance = true;
+            if (alliance === '__none__') {
+                matchesAlliance = tag === '';
+            } else if (alliance) {
+                matchesAlliance = tag === alliance;
+            }
+            const inTopScope = !allianceFilterActive || rank <= 0 || rank <= maxRankWhenAllianceFiltered;
+            const show = matchesSearch && matchesAlliance && inTopScope;
+            row.hidden = !show;
+            // Class backup: mobile responsive-table sets display:block on tr,
+            // which can override the HTML hidden attribute in some browsers.
+            row.classList.toggle('is-filtered-out', !show);
+            if (show) {
+                visible += 1;
+            }
         });
+
+        if (playerFilterCount) {
+            if (total === 0) {
+                playerFilterCount.textContent = '';
+            } else if (visible === total && !query && !alliance) {
+                playerFilterCount.textContent = total + ' players';
+            } else if (allianceFilterActive) {
+                playerFilterCount.textContent = visible + ' in top 100';
+            } else {
+                playerFilterCount.textContent = visible + ' of ' + total;
+            }
+        }
+    }
+
+    function rebuildPlayerAllianceFilterOptions() {
+        if (!playerTable || !playerAllianceFilter) {
+            return;
+        }
+
+        const selected = playerAllianceFilter.value;
+        const counts = new Map();
+        playerTable.querySelectorAll('tbody tr[data-name]').forEach((row) => {
+            const rank = parseInt(row.dataset.rank || '0', 10) || 0;
+            // Dropdown counts reflect top-100 pool (same scope as alliance filter).
+            if (rank > 100) {
+                return;
+            }
+            const key = (row.dataset.tag || '').trim().toLowerCase();
+            if (!key) {
+                return;
+            }
+            const label = (row.dataset.tagLabel || row.dataset.tag || key).trim() || key;
+            const prev = counts.get(key);
+            if (prev) {
+                prev.count += 1;
+            } else {
+                counts.set(key, { label, count: 1 });
+            }
+        });
+
+        const sorted = Array.from(counts.entries()).sort((a, b) =>
+            a[1].label.localeCompare(b[1].label, undefined, { sensitivity: 'base' })
+        );
+
+        const keep = new Set(['', '__none__']);
+        playerAllianceFilter.querySelectorAll('option').forEach((opt) => {
+            if (!keep.has(opt.value)) {
+                opt.remove();
+            }
+        });
+
+        sorted.forEach(([value, info]) => {
+            const opt = document.createElement('option');
+            opt.value = value;
+            opt.textContent = info.label + ' (' + info.count + ')';
+            playerAllianceFilter.appendChild(opt);
+        });
+
+        if (selected && (selected === '__none__' || counts.has(selected) || selected === '')) {
+            playerAllianceFilter.value = selected;
+        } else {
+            playerAllianceFilter.value = '';
+        }
     }
 
     playerSearch?.addEventListener('input', applyPlayerFilter);
+    playerAllianceFilter?.addEventListener('change', applyPlayerFilter);
+    playerAllianceFilter?.addEventListener('input', applyPlayerFilter);
+    applyPlayerFilter();
+
+    // Runtime WOS Atlas alliance tags for the players board (batched + server-cached).
+    async function fillPlayerAllianceTags() {
+        if (!playerTable) {
+            return;
+        }
+
+        // Prefer cells still missing a saved tag; also refresh all once/day via server TTL.
+        const allCells = Array.from(playerTable.querySelectorAll('.player-alliance-cell[data-uid]'));
+        const pendingCells = allCells.filter((cell) => cell.dataset.needsLookup === '1');
+        // If everything is already saved on the board, still ping the server in one
+        // small batch of missing-only — skip network entirely when none pending.
+        // Daily re-check: if any saved tags exist, refresh a light sample is unnecessary;
+        // full daily refresh happens the next time a tag is missing OR after TTL when
+        // JS asks for pending. To honor once/day for everyone, request all UIDs when
+        // none are pending but localStorage day key is stale.
+        const dayKey = 'wos_alliance_refresh_day';
+        const today = new Date().toISOString().slice(0, 10);
+        const alreadyRefreshedToday = (() => {
+            try {
+                return window.localStorage.getItem(dayKey) === today;
+            } catch (e) {
+                return false;
+            }
+        })();
+
+        let cells = pendingCells;
+        if (pendingCells.length === 0) {
+            if (alreadyRefreshedToday) {
+                return;
+            }
+            cells = allCells;
+        }
+
+        const uids = cells
+            .map((cell) => String(cell.dataset.uid || '').replace(/\D+/g, ''))
+            .filter((uid) => uid !== '');
+
+        if (uids.length === 0) {
+            return;
+        }
+
+        const byUid = new Map(cells.map((cell) => [String(cell.dataset.uid || '').replace(/\D+/g, ''), cell]));
+        const batchSize = 25;
+
+        const renderAlliance = (cell, tag, allianceId) => {
+            const row = cell.closest('tr');
+            const cleanTag = (tag || '').trim();
+            const cleanId = (allianceId || '').trim();
+            if (row) {
+                row.dataset.tag = cleanTag.toLowerCase();
+                row.dataset.tagLabel = cleanTag;
+            }
+            cell.dataset.needsLookup = '0';
+            cell.classList.remove('is-pending');
+            cell.replaceChildren();
+            if (!cleanTag) {
+                const empty = document.createElement('span');
+                empty.className = 'muted-cell';
+                empty.textContent = '—';
+                cell.appendChild(empty);
+                return;
+            }
+            if (cleanId) {
+                const link = document.createElement('a');
+                link.href = 'alliance.php?id=' + encodeURIComponent(cleanId);
+                link.className = 'alliance-link';
+                link.textContent = cleanTag;
+                cell.appendChild(link);
+            } else {
+                cell.textContent = cleanTag;
+            }
+        };
+
+        for (let i = 0; i < uids.length; i += batchSize) {
+            const batch = uids.slice(i, i + batchSize);
+            try {
+                const res = await fetch(
+                    'player-alliance-lookup.php?uids=' + encodeURIComponent(batch.join(',')),
+                    { headers: { Accept: 'application/json' }, cache: 'no-store' }
+                );
+                const data = await res.json().catch(() => null);
+                if (!data?.ok || !data.players) {
+                    batch.forEach((uid) => {
+                        const cell = byUid.get(uid);
+                        if (cell) {
+                            renderAlliance(cell, '', '');
+                        }
+                    });
+                    continue;
+                }
+                batch.forEach((uid) => {
+                    const cell = byUid.get(uid);
+                    if (!cell) {
+                        return;
+                    }
+                    const info = data.players[uid] || {};
+                    renderAlliance(cell, info.alliance_tag || '', info.alliance_id || '');
+                });
+            } catch (err) {
+                batch.forEach((uid) => {
+                    const cell = byUid.get(uid);
+                    if (cell) {
+                        renderAlliance(cell, '', '');
+                    }
+                });
+            }
+            rebuildPlayerAllianceFilterOptions();
+            applyPlayerFilter();
+        }
+
+        rebuildPlayerAllianceFilterOptions();
+        applyPlayerFilter();
+
+        try {
+            window.localStorage.setItem(dayKey, today);
+        } catch (e) {
+            // ignore storage failures
+        }
+    }
+
+    fillPlayerAllianceTags();
 
     const rosterTable = document.getElementById('roster-table');
     const rosterSearch = document.getElementById('roster-search');

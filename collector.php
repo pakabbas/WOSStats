@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/functions.php';
+require_once __DIR__ . '/atlas_v2.php';
 
 /**
  * Fetch alliance data for a Whiteout Survival state.
@@ -25,13 +26,16 @@ function fetchAlliances(string $stateId): array
     }
 
     $apiUrl = trim((string) ($config['api_url'] ?? ''));
-    if ($apiUrl === '') {
+    if (atlasV2Enabled($config)) {
+        // Retired v1 developer API (401 INVALID_API_KEY) → public v2 /servers/{kid}/alliances.
+        $payload = atlasV2AlliancesLeaderboard($stateId);
+    } elseif ($apiUrl === '') {
         throw new RuntimeException(
             'No alliance data source configured. Set api_url in config.json, or enable sample_mode.'
         );
+    } else {
+        $payload = httpGetJson($apiUrl, $stateId, $config);
     }
-
-    $payload = httpGetJson($apiUrl, $stateId, $config);
     $rawAlliances = extractListFromPayload($payload, ['alliances', 'entries']);
     $alliances = [];
     $rank = 1;
@@ -68,11 +72,15 @@ function fetchPlayers(string $stateId): array
     }
 
     $apiUrl = trim((string) ($config['players_api_url'] ?? ''));
-    if ($apiUrl === '') {
+    if (atlasV2Enabled($config) && ($apiUrl === '' || str_contains($apiUrl, 'api.wosatlas.com'))) {
+        // v2 has no 200-row board: power.rank (20) + top-20 members of the top-20 alliances.
+        // Callers must MERGE this into the existing board (see update.php).
+        $payload = atlasV2PowerLeaderboard($stateId, TOP_PLAYERS_LIMIT);
+    } elseif ($apiUrl === '') {
         return [];
+    } else {
+        $payload = httpGetJson($apiUrl, $stateId, $config);
     }
-
-    $payload = httpGetJson($apiUrl, $stateId, $config);
     $rawPlayers = extractListFromPayload($payload, ['players', 'entries']);
     $players = [];
     $rank = 1;
@@ -189,7 +197,7 @@ function buildApiUrl(string $apiUrl, string $stateId): string
 
 /**
  * Fetch / import roster for tracked alliances (AOC, WaS).
- * Prefer live Atlas members when the list is non-empty; otherwise use a local dump.
+ * Atlas v2 gives the top 20 members only; merge them onto the stored roster / local dump.
  *
  * @return array{aid: string, tag: string, name: ?string, member_count: int, members: list<array>, updated_at: string, source: string}|null
  */
@@ -204,24 +212,34 @@ function fetchAllianceRoster(string $allianceId): ?array
     $payload = null;
     $source = 'import';
 
-    $apiUrl = 'https://api.wosatlas.com/v1/alliances/' . rawurlencode($allianceId) . '/members';
+    // v2 returns only the TOP 20 members by power, so live data is merged onto the
+    // last stored roster (or the import dump) instead of replacing it.
+    $live = null;
     try {
-        $live = httpGetJson($apiUrl, (string) ($config['state_id'] ?? ''), $config);
-        $liveMembers = $live['members'] ?? null;
-        if (is_array($liveMembers) && $liveMembers !== []) {
-            $payload = $live;
-            $source = 'api';
+        $live = atlasV2AllianceMembersPayload($allianceId);
+        if (!is_array($live) || empty($live['members'])) {
+            $live = null;
         }
     } catch (Throwable $e) {
-        // Fall through to local import dumps.
+        $live = null; // Fall through to stored roster / import dumps.
+    }
+
+    $base = loadAllianceRoster($allianceId);
+    if (!empty($base['members'])) {
+        $payload = $base;
+        $source = preg_replace('/^atlas-v2(-top20\+)?/', '', (string) ($base['source'] ?? 'stored')) ?: 'stored';
+    } else {
+        $payload = loadRosterImportPayload($allianceId, $tag);
+        $source = 'import';
+    }
+
+    if ($live !== null) {
+        $payload = mergeLiveRosterMembers(is_array($payload) ? $payload : [], $live);
+        $source = ($live['partial'] ?? false) ? 'atlas-v2-top20+' . $source : 'atlas-v2';
     }
 
     if ($payload === null) {
-        $payload = loadRosterImportPayload($allianceId, $tag);
-        if ($payload === null) {
-            return null;
-        }
-        $source = 'import';
+        return null;
     }
 
     $members = [];
@@ -258,6 +276,46 @@ function fetchAllianceRoster(string $allianceId): ?array
         'updated_at' => nowUtc(),
         'source' => $source,
     ];
+}
+
+/**
+ * Merge a partial live member list (top 20) onto a stored/import roster payload, keyed by uid.
+ * Members missing from the live list are kept as-is (v2 cannot tell us who left).
+ *
+ * @param array<string, mixed> $base
+ * @param array<string, mixed> $live
+ * @return array<string, mixed>
+ */
+function mergeLiveRosterMembers(array $base, array $live): array
+{
+    $byId = [];
+    foreach ($base['members'] ?? [] as $m) {
+        if (!is_array($m)) {
+            continue;
+        }
+        $id = (string) ($m['uid'] ?? $m['id'] ?? '');
+        if ($id !== '') {
+            $byId[$id] = $m;
+        }
+    }
+    foreach ($live['members'] ?? [] as $m) {
+        $id = (string) ($m['uid'] ?? '');
+        if ($id === '') {
+            continue;
+        }
+        $prev = $byId[$id] ?? [];
+        // normalizeRosterMember reads uid/id, nick_name/name, lv, office, x, y, abbr.
+        unset($prev['id'], $prev['name']);
+        $byId[$id] = array_merge($prev, array_filter($m, static fn($v): bool => $v !== null));
+    }
+    $base['members'] = array_values($byId);
+    foreach (['abbr', 'name', 'leaderName'] as $k) {
+        if (!empty($live[$k])) {
+            $base[$k] = $live[$k];
+        }
+    }
+
+    return $base;
 }
 
 function loadRosterImportPayload(string $allianceId, string $tag): ?array

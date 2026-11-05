@@ -21,6 +21,11 @@ $totalPower = getTotalStatePower($alliances);
 $napCount = count(array_filter($alliances, static fn(array $a): bool => isNapAlliance($a, $napTags)));
 $sampleMode = !empty($config['sample_mode']);
 $napBanned = loadNapBannedPlayers();
+$rulesCount = count(loadNapRules(true));
+$announcementsCount = count(loadAnnouncements(true));
+$napBannedCount = count($napBanned);
+$homeSignInHref = isAppAdmin() ? 'admin/' : 'users.php';
+$homeSignInLabel = isAppAdmin() ? 'Admin' : 'Sign In';
 
 usort($alliances, static fn(array $a, array $b): int => ($a['rank'] ?? PHP_INT_MAX) <=> ($b['rank'] ?? PHP_INT_MAX));
 
@@ -56,11 +61,13 @@ foreach ($alliances as $alliance) {
         'alliance' => $alliance,
         'change1d' => calculatePowerChange($history, $alliance, 24),
         'change3d' => calculatePowerChange($history, $alliance, 24 * 3),
+        'change5d' => calculatePowerChange($history, $alliance, 24 * 5),
+        'change7d' => calculatePowerChange($history, $alliance, 24 * 7),
         'is_nap' => isNapAlliance($alliance, $napTags),
     ];
 }
 
-$tableColspan = 8;
+$tableColspan = 10;
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -81,11 +88,28 @@ $tableColspan = 8;
                 <p class="eyebrow">WHITEOUT SURVIVAL</p>
                 <h1><?= h(strtoupper($stateName)) ?></h1>
                 <p class="subtitle">Alliance power ranking · NAP tracking</p>
+                <div class="home-mobile-quicklinks" aria-label="Quick links">
+                    <a class="home-quick-btn home-quick-btn-banned" href="nap-banned.php">
+                        <span class="home-quick-count"><?= (int) $napBannedCount ?></span>
+                        <span class="home-quick-label">NAP Ban List</span>
+                    </a>
+                    <a class="home-quick-btn home-quick-btn-rules" href="nap-rules.php">
+                        <span class="home-quick-count"><?= (int) $rulesCount ?></span>
+                        <span class="home-quick-label">NAP Rules</span>
+                    </a>
+                    <a class="home-quick-btn home-quick-btn-announcements" href="announcements.php">
+                        <span class="home-quick-count"><?= (int) $announcementsCount ?></span>
+                        <span class="home-quick-label">Announcements</span>
+                    </a>
+                    <a class="home-quick-btn home-quick-btn-signin" href="<?= h($homeSignInHref) ?>">
+                        <span class="home-quick-label"><?= h($homeSignInLabel) ?></span>
+                    </a>
+                </div>
                 <?php if ($sampleMode): ?>
                     <p class="banner banner-warning">Development mode: displaying sample data (sample_mode enabled)</p>
                 <?php endif; ?>
             </div>
-            <a class="btn-nap-banned" href="nap-banned.php">
+            <a class="btn-nap-banned home-nap-banned-desktop" href="nap-banned.php">
                 NAP Banned list
                 <?php if ($napBanned !== []): ?>
                     <span class="btn-nap-banned-count"><?= count($napBanned) ?></span>
@@ -138,6 +162,8 @@ $tableColspan = 8;
                             <th>Total Members</th>
                             <th>1d Change</th>
                             <th>3d Change</th>
+                            <th>5d Change</th>
+                            <th>7d Change</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -174,6 +200,8 @@ $tableColspan = 8;
                                     <td data-label="Total Members"><?= h(isset($alliance['members']) ? (string) $alliance['members'] : '—') ?></td>
                                     <td data-label="1d" class="<?= powerChangeClass($row['change1d']) ?>"><?= h(formatPowerChange($row['change1d'])) ?></td>
                                     <td data-label="3d" class="<?= powerChangeClass($row['change3d']) ?>"><?= h(formatPowerChange($row['change3d'])) ?></td>
+                                    <td data-label="5d" class="<?= powerChangeClass($row['change5d']) ?>"><?= h(formatPowerChange($row['change5d'])) ?></td>
+                                    <td data-label="7d" class="<?= powerChangeClass($row['change7d']) ?>"><?= h(formatPowerChange($row['change7d'])) ?></td>
                                 </tr>
                             <?php endforeach; ?>
                         <?php endif; ?>

@@ -45,6 +45,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['nap_banned
 }
 
 $napBanned = loadNapBannedPlayers();
+$liveInfo = enrichNapBannedPlayersLiveInfo($napBanned, $config);
+$napBanned = $liveInfo['list'];
 $removeEntryId = $openModal === 'remove' ? (string) ($_POST['entry_id'] ?? '') : '';
 ?>
 <!DOCTYPE html>
@@ -67,6 +69,7 @@ $removeEntryId = $openModal === 'remove' ? (string) ($_POST['entry_id'] ?? '') :
                 <h1>NAP Banned</h1>
                 <p class="subtitle">
                     <?= h($stateName) ?> · <?= count($napBanned) ?> player<?= count($napBanned) === 1 ? '' : 's' ?>
+                    · live alliance/coords refresh once per day
                 </p>
             </div>
             <button type="button" class="btn-primary" id="nap-banned-open-add" data-open-add>
@@ -95,11 +98,55 @@ $removeEntryId = $openModal === 'remove' ? (string) ($_POST['entry_id'] ?? '') :
                             $metaParts[] = 'ID ' . (string) $entry['player_id'];
                         }
                         $metaParts[] = formatDisplayDate($entry['added_at'] ?? null);
+
+                        $allianceTag = trim((string) ($entry['alliance_tag'] ?? ''));
+                        $allianceName = trim((string) ($entry['alliance_name'] ?? ''));
+                        $allianceId = trim((string) ($entry['alliance_id'] ?? ''));
+                        $hasCoords = isset($entry['x'], $entry['y'])
+                            && $entry['x'] !== null
+                            && $entry['y'] !== null
+                            && $entry['x'] !== ''
+                            && $entry['y'] !== '';
                         ?>
                         <div class="nap-banned-row">
                             <div class="nap-banned-row-main">
                                 <strong><?= h($entryName) ?></strong>
                                 <span class="muted"><?= h(implode(' · ', $metaParts)) ?></span>
+                                <?php
+                                $liveName = trim((string) ($entry['live_name'] ?? ''));
+                                $showLiveName = $liveName !== '' && strcasecmp($liveName, $entryName) !== 0;
+                                ?>
+                                <span class="nap-banned-live">
+                                    <?php if ($showLiveName): ?>
+                                        <span class="nap-banned-live-item muted">Now: <?= h($liveName) ?></span>
+                                        <span class="nap-banned-live-sep muted">·</span>
+                                    <?php endif; ?>
+                                    <?php if ($allianceTag !== '' || $allianceName !== ''): ?>
+                                        <span class="nap-banned-live-item">
+                                            Alliance:
+                                            <?php if ($allianceId !== ''): ?>
+                                                <a href="alliance.php?id=<?= urlencode($allianceId) ?>" class="alliance-link">
+                                                    <?= h($allianceTag !== '' ? $allianceTag : $allianceName) ?>
+                                                </a>
+                                            <?php else: ?>
+                                                <strong><?= h($allianceTag !== '' ? $allianceTag : $allianceName) ?></strong>
+                                            <?php endif; ?>
+                                            <?php if ($allianceName !== '' && $allianceTag !== '' && strcasecmp($allianceName, $allianceTag) !== 0): ?>
+                                                <span class="muted"><?= h($allianceName) ?></span>
+                                            <?php endif; ?>
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="nap-banned-live-item muted">Alliance: —</span>
+                                    <?php endif; ?>
+                                    <span class="nap-banned-live-sep muted">·</span>
+                                    <?php if ($hasCoords): ?>
+                                        <span class="nap-banned-live-item">
+                                            Coords: X <?= h((string) $entry['x']) ?> · Y <?= h((string) $entry['y']) ?>
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="nap-banned-live-item muted">Coords: —</span>
+                                    <?php endif; ?>
+                                </span>
                                 <?php if (!empty($entry['reason'])): ?>
                                     <span class="nap-banned-reason"><?= h((string) $entry['reason']) ?></span>
                                 <?php endif; ?>

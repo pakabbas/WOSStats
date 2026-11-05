@@ -8,6 +8,7 @@ $config = loadConfig();
 $stateName = $config['state_name'] ?? ('State ' . ($config['state_id'] ?? ''));
 $googleClientId = googleOAuthConfig()['client_id'];
 $bootUser = currentAppUser();
+$bootIsAdmin = $bootUser !== null && isAppAdmin($bootUser);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -29,6 +30,7 @@ $bootUser = currentAppUser();
             class="chat-layout users-layout"
             data-google-client-id="<?= h($googleClientId) ?>"
             data-boot-signed-in="<?= $bootUser ? '1' : '0' ?>"
+            data-boot-is-admin="<?= $bootIsAdmin ? '1' : '0' ?>"
         >
             <aside class="users-list-panel">
                 <header class="users-list-header">
@@ -45,8 +47,24 @@ $bootUser = currentAppUser();
                 </header>
 
                 <div id="users-auth-box" class="users-auth-box" <?= $bootUser ? 'hidden' : '' ?>>
-                    <p class="muted">Sign in with Google to see members and chat privately.</p>
+                    <p class="muted">Sign in to see members and chat privately.</p>
                     <div id="users-google-btn-host" class="users-google-btn-host" role="presentation"></div>
+
+                    <div class="users-auth-divider" aria-hidden="true"><span>or</span></div>
+
+                    <form id="users-local-login" class="users-local-login" autocomplete="on">
+                        <label class="users-local-label" for="users-local-username">Username</label>
+                        <input id="users-local-username" name="username" type="text" maxlength="64"
+                               autocomplete="username" placeholder="Username" required>
+
+                        <label class="users-local-label" for="users-local-password">Password</label>
+                        <input id="users-local-password" name="password" type="password" maxlength="128"
+                               autocomplete="current-password" placeholder="Password" required>
+
+                        <button type="submit" class="btn-primary users-local-submit">Sign in</button>
+                    </form>
+
+                    <p class="muted users-auth-note">No public sign-up — Google accounts are welcome; username logins are created by admins.</p>
                     <p id="users-auth-status" class="chat-status" role="status"></p>
                 </div>
 
@@ -55,8 +73,30 @@ $bootUser = currentAppUser();
                         <img id="users-me-photo" class="users-avatar" alt=""
                             <?= ($bootUser['photo_url'] ?? null) ? 'src="' . h((string) $bootUser['photo_url']) . '"' : 'hidden' ?>>
                         <div class="users-me-meta">
-                            <strong id="users-me-name"><?= h((string) ($bootUser['display_name'] ?? '—')) ?></strong>
-                            <span id="users-me-email" class="muted"><?= h((string) ($bootUser['email'] ?? '')) ?></span>
+                            <div class="users-me-name-row" id="users-me-name-row">
+                                <strong id="users-me-name"><?= h((string) ($bootUser['display_name'] ?? '—')) ?></strong>
+                                <button type="button" id="users-edit-name" class="chat-link-btn users-edit-name-btn" <?= $bootUser ? '' : 'hidden' ?>>
+                                    Edit
+                                </button>
+                            </div>
+                            <form id="users-name-form" class="users-name-form" hidden>
+                                <input
+                                    id="users-name-input"
+                                    type="text"
+                                    maxlength="120"
+                                    minlength="2"
+                                    autocomplete="nickname"
+                                    aria-label="Display name"
+                                    placeholder="Your display name"
+                                    value="<?= h((string) ($bootUser['display_name'] ?? '')) ?>"
+                                >
+                                <div class="users-name-form-actions">
+                                    <button type="submit" class="btn-primary users-name-save">Save</button>
+                                    <button type="button" id="users-name-cancel" class="chat-link-btn">Cancel</button>
+                                </div>
+                            </form>
+                            <span id="users-me-email" class="muted"><?= h((string) (($bootUser['email'] ?? null) ?: ($bootUser['username'] ?? ''))) ?></span>
+                            <p id="users-name-status" class="chat-status" role="status" hidden></p>
                         </div>
                     </div>
 
@@ -109,7 +149,7 @@ $bootUser = currentAppUser();
                             </div>
 
                             <div class="chat-compose-row">
-                                <button type="button" id="users-dm-image-btn" class="chat-image-btn" title="Attach image (max 512 KB)" aria-label="Attach image">
+                                <button type="button" id="users-dm-image-btn" class="chat-image-btn" title="Attach image (max 12 MB)" aria-label="Attach image">
                                     <span class="chat-image-btn-label">Image</span>
                                 </button>
                                 <input id="users-dm-image-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>

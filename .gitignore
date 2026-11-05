@@ -44,3 +44,14 @@ error_log
 Thumbs.db
 __pycache__/
 node_modules/
+
+# Extra runtime / secrets (synced from live Nov 2026)
+data/site-visits.json
+data/svs-*.json
+data/atlas-v2/
+data/*.log
+data/*.lock
+uploads/cache/
+*.log
+.env
+.env.*

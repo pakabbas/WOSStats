@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Deploy Whiteout Survival tracker to Hostinger (state4627 only).
+# Deploy WOSTracker to Hostinger (wostracker.online only).
 # Required environment variables:
 #   HOSTINGER_SSH_HOST      e.g. 157.173.209.199
-#   HOSTINGER_SSH_USER      e.g. u123456789
+#   HOSTINGER_SSH_USER      e.g. u229715236
 #   HOSTINGER_SSH_PORT      e.g. 65002
-#   HOSTINGER_SSH_KEY            path to private key file (hostinger_ryan_ed25519)
-#   HOSTINGER_SSH_PRIVATE_KEY    alternative: private key contents (GitHub Actions / Cursor secrets)
-#   HOSTINGER_DEPLOY_PATH        e.g. /home/u123456789/domains/state4627.btkdeals.com/public_html
+#   HOSTINGER_SSH_KEY            path to private key file
+#   HOSTINGER_SSH_PRIVATE_KEY    alternative: private key contents
+#   HOSTINGER_DEPLOY_PATH        e.g. domains/wostracker.online/public_html
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -26,15 +26,14 @@ fi
 
 : "${HOSTINGER_SSH_KEY:?HOSTINGER_SSH_KEY or HOSTINGER_SSH_PRIVATE_KEY is required}"
 
-if [[ "${HOSTINGER_DEPLOY_PATH}" != *state4627* ]]; then
-    echo "Refusing to deploy: HOSTINGER_DEPLOY_PATH must contain 'state4627'." >&2
+if [[ "${HOSTINGER_DEPLOY_PATH}" != *wostracker.online* ]]; then
+    echo "Refusing to deploy: HOSTINGER_DEPLOY_PATH must contain 'wostracker.online'." >&2
     exit 1
 fi
 
 validate_passphrase_secret() {
     if [[ -n "${HOSTINGER_SSH_KEY_PASSPHRASE:-}" && "${HOSTINGER_SSH_KEY_PASSPHRASE}" == *BEGIN*OPENSSH* ]]; then
         echo "Error: HOSTINGER_SSH_KEY_PASSPHRASE contains a private key, not the key passphrase." >&2
-        echo "Set HOSTINGER_SSH_KEY_PASSPHRASE to the short password for hostinger_ryan_ed25519." >&2
         exit 1
     fi
 }
@@ -75,55 +74,51 @@ REMOTE="${HOSTINGER_SSH_USER}@${HOSTINGER_SSH_HOST}"
 
 echo "Deploying to ${REMOTE}:${HOSTINGER_DEPLOY_PATH}"
 
-rsync -avz --delete \
+# No --delete: never remove server-only runtime files.
+rsync -avz \
     -e "ssh ${SSH_OPTS[*]}" \
     --exclude '.git/' \
+    --exclude '.github/' \
     --exclude 'config.json' \
-    --exclude 'data/' \
-    --exclude 'uploads/incidents/' \
-    --exclude 'uploads/chat/' \
+    --exclude 'error_log' \
+    --exclude 'ssh.txt' \
+    --exclude '.env' \
+    --exclude '.env.*' \
+    --exclude 'data/*.json' \
+    --exclude 'data/*.log' \
+    --exclude 'data/*.lock' \
+    --exclude 'data/*.tmp' \
+    --exclude 'data/atlas-cookies.txt' \
+    --exclude 'data/rosters/' \
+    --exclude 'data/roster-imports/' \
+    --exclude 'data/roster-powers/' \
+    --exclude 'data/atlas-v2/' \
+    --exclude 'data/svs-*' \
+    --exclude 'data/site-visits.json' \
+    --exclude 'uploads/video/*' \
+    --exclude 'uploads/chat/*' \
+    --exclude 'uploads/incidents/*' \
+    --exclude 'uploads/cache/' \
     --exclude 'Requirements.md' \
     --exclude 'deploy.sh' \
-    --exclude 'error_log' \
-    --exclude '_*.php' \
+    --exclude 'scripts/' \
+    --exclude 'ssh.txt.example' \
     --include 'uploads/video/.htaccess' \
-    --exclude 'uploads/video/*' \
+    --include 'uploads/chat/.htaccess' \
+    --include 'uploads/incidents/.htaccess' \
+    --include 'data/.htaccess' \
     "${ROOT_DIR}/" "${REMOTE}:${HOSTINGER_DEPLOY_PATH}/"
 
-ssh "${SSH_OPTS[@]}" "${REMOTE}" "bash -s" <<EOF
+ssh "${SSH_OPTS[@]}" "${REMOTE}" "bash -s" <<REMOTE
 set -euo pipefail
 DEPLOY_PATH="${HOSTINGER_DEPLOY_PATH}"
 cd "\${DEPLOY_PATH}"
-
-mkdir -p data
-chmod 755 data
-
+mkdir -p data uploads/video uploads/chat uploads/incidents
+chmod 755 data uploads
 if [ ! -f config.json ]; then
-    UPDATE_TOKEN=\$(php -r 'echo bin2hex(random_bytes(16));')
-    cat > config.json <<CONFIG
-{
-    "state_id": "4627",
-    "state_name": "State 4627",
-    "api_url": "",
-    "api_key": "",
-    "update_token": "\${UPDATE_TOKEN}",
-    "sample_mode": false,
-    "nap_alliances": []
-}
-CONFIG
-    chmod 600 config.json
-    echo "Created config.json with a new update_token."
+    echo "WARNING: config.json missing — create it on the server before relying on NAP/admin features."
 fi
-
-if [ ! -f data/alliances.json ]; then
-    echo '[]' > data/alliances.json
-fi
-if [ ! -f data/history.json ]; then
-    echo '[]' > data/history.json
-fi
-chmod 664 data/alliances.json data/history.json 2>/dev/null || true
-
 echo "Deployment complete at \${DEPLOY_PATH}"
-EOF
+REMOTE
 
-echo "Done. Visit https://state4627.btkdeals.com/"
+echo "Done. Visit https://wostracker.online/"

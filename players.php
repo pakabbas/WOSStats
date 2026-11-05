@@ -14,10 +14,15 @@ $lastUpdated = getLastUpdated($players);
 
 $players = rankPlayersByPower(is_array($players) ? $players : []);
 
+$allianceTagCounts = [];
 $rows = [];
 foreach ($players as $player) {
     $id = (string) ($player['id'] ?? '');
     $power = isset($player['power']) ? (int) $player['power'] : null;
+    $tag = trim((string) ($player['alliance_tag'] ?? ''));
+    if ($tag !== '') {
+        $allianceTagCounts[$tag] = ($allianceTagCounts[$tag] ?? 0) + 1;
+    }
 
     $powerChange24 = ($id !== '' && $power !== null)
         ? calculatePlayerPowerChange($playersHistory, $id, $power, 24)
@@ -32,6 +37,11 @@ foreach ($players as $player) {
         'power_pct_24h' => $powerPct24,
     ];
 }
+
+uksort(
+    $allianceTagCounts,
+    static fn(string $a, string $b): int => strcasecmp($a, $b)
+);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -73,7 +83,22 @@ foreach ($players as $player) {
 
         <section class="panel">
             <div class="panel-toolbar">
-                <input type="search" id="player-search" class="search-input" placeholder="Filter this list by name or ID…" aria-label="Filter players">
+                <div class="player-filter-bar">
+                    <button type="button" class="refresh-data-btn" id="refresh-alliances" title="Refresh data (same as run.php)">
+                        Refresh
+                    </button>
+                    <span id="refresh-alliances-status" class="refresh-data-status" role="status" aria-live="polite"></span>
+                    <label class="player-filter-label" for="player-alliance-filter">Alliance</label>
+                    <select id="player-alliance-filter" class="search-input player-alliance-filter" aria-label="Filter by alliance">
+                        <option value="">All alliances</option>
+                        <option value="__none__">No alliance / unknown</option>
+                        <?php foreach ($allianceTagCounts as $tag => $count): ?>
+                            <option value="<?= h(strtolower($tag)) ?>"><?= h($tag) ?> (<?= (int) $count ?>)</option>
+                        <?php endforeach; ?>
+                    </select>
+                    <input type="search" id="player-search" class="search-input" placeholder="Filter by name, alliance, or ID…" aria-label="Filter players">
+                    <span id="player-filter-count" class="player-filter-count" aria-live="polite"></span>
+                </div>
                 <a class="btn-secondary" href="player-search.php">Search Player by ID</a>
             </div>
 
@@ -85,6 +110,7 @@ foreach ($players as $player) {
                         <tr>
                             <th>Rank</th>
                             <th>Player</th>
+                            <th>Alliance</th>
                             <th>Power</th>
                             <th>24h</th>
                             <th>24h %</th>
@@ -96,7 +122,7 @@ foreach ($players as $player) {
                     <tbody>
                         <?php if ($rows === []): ?>
                             <tr>
-                                <td colspan="8" class="empty-cell">
+                                <td colspan="9" class="empty-cell">
                                     No player data yet. Run <code>update.php?token=YOUR_TOKEN</code> to fetch top 200.
                                 </td>
                             </tr>
@@ -106,13 +132,34 @@ foreach ($players as $player) {
                                 $player = $row['player'];
                                 $powerChange24 = $row['power_change_24h'];
                                 $powerPct24 = $row['power_pct_24h'];
+                                $playerId = trim((string) ($player['id'] ?? ''));
+                                $savedTag = trim((string) ($player['alliance_tag'] ?? ''));
+                                $savedAid = trim((string) ($player['alliance_id'] ?? ''));
+                                $needsLookup = $savedTag === '';
                                 ?>
                                 <tr
                                     data-name="<?= h(strtolower((string) ($player['name'] ?? ''))) ?>"
-                                    data-id="<?= h(strtolower((string) ($player['id'] ?? ''))) ?>"
+                                    data-id="<?= h(strtolower($playerId)) ?>"
+                                    data-rank="<?= h((string) ($player['rank'] ?? '')) ?>"
+                                    data-tag="<?= h(strtolower($savedTag)) ?>"
+                                    data-tag-label="<?= h($savedTag) ?>"
                                 >
                                     <td data-label="Rank"><?= h((string) ($player['rank'] ?? '—')) ?></td>
                                     <td data-label="Player"><?= h((string) ($player['name'] ?? 'Unknown')) ?></td>
+                                    <td
+                                        data-label="Alliance"
+                                        class="player-alliance-cell<?= $needsLookup ? ' is-pending' : '' ?>"
+                                        data-uid="<?= h($playerId) ?>"
+                                        data-needs-lookup="<?= $needsLookup ? '1' : '0' ?>"
+                                    >
+                                        <?php if ($savedTag !== '' && $savedAid !== ''): ?>
+                                            <a href="alliance.php?id=<?= urlencode($savedAid) ?>" class="alliance-link"><?= h($savedTag) ?></a>
+                                        <?php elseif ($savedTag !== ''): ?>
+                                            <?= h($savedTag) ?>
+                                        <?php else: ?>
+                                            <span class="muted-cell player-alliance-pending">…</span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td data-label="Power"><?= h(formatPower($player['power'] ?? null)) ?></td>
                                     <td data-label="24h" class="<?= changeClass($powerChange24 !== null ? (float) $powerChange24 : null) ?>">
                                         <?= h(formatPowerChange($powerChange24)) ?>

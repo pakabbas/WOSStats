@@ -119,7 +119,7 @@ $openModal = $formError !== null || (isset($_GET['report']) && $_GET['report'] =
 
         <p class="incident-page-credit">
             Built by <strong>Abbas</strong>
-            · <a href="https://wa.me/923052848987" target="_blank" rel="noopener noreferrer">WhatsApp</a>
+            · <?php renderWhatsAppIconLink(); ?>
         </p>
     </div>
 

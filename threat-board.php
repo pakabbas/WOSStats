@@ -91,7 +91,7 @@ usort($rows, static function (array $a, array $b): int {
     return ($a['alliance']['rank'] ?? PHP_INT_MAX) <=> ($b['alliance']['rank'] ?? PHP_INT_MAX);
 });
 
-$tableColspan = 9;
+$tableColspan = 10;
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -141,7 +141,7 @@ $tableColspan = 9;
 
             <?php if ($showThreatBoard): ?>
                 <p class="muted panel-subtitle threat-board-note">
-                    Ratio = threat score: √spike + roster depth + upper mass · spike = max ÷ median (one whale); depth = strong median vs state (many whales, e.g. LUX).
+                    Threat = combined power of the alliance's 10 strongest players on the top-200 board (sorted highest first). Whales = members on the board at 60M+.
                 </p>
             <?php endif; ?>
 
@@ -156,7 +156,8 @@ $tableColspan = 9;
                             <th title="Strongest member power">Top player</th>
                             <th title="Median member power">Median</th>
                             <th title="Total power ÷ members">Avg / member</th>
-                            <th class="ratio-col" title="Threat score — sorted highest first">Ratio</th>
+                            <th class="ratio-col" title="Combined power of the 10 strongest board players — sorted highest first">Threat (top 10)</th>
+                            <th title="Members on the top-200 board at 60M+ power">Whales 60M+</th>
                             <th>Members</th>
                         </tr>
                     </thead>
@@ -195,7 +196,8 @@ $tableColspan = 9;
                                     <td data-label="Top player"><?= h(formatPower($alliance['max_power'] ?? null)) ?></td>
                                     <td data-label="Median"><?= h(formatPower($alliance['median_power'] ?? null)) ?></td>
                                     <td data-label="Avg / member"><?= h(formatPower($row['avg_power'])) ?></td>
-                                    <td data-label="Ratio" class="ratio-cell <?= h(threatRatioClass($ratio)) ?>" title="<?= h(formatThreatRatioTooltip($metrics)) ?>"><?= h(formatTopHeavyRatio($ratio)) ?></td>
+                                    <td data-label="Threat (top 10)" class="ratio-cell <?= h(threatRatioClass($ratio)) ?>" title="<?= h(formatThreatRatioTooltip($metrics)) ?>"><?= h(formatThreatScore($ratio)) ?></td>
+                                    <td data-label="Whales 60M+"><?= h($metrics !== null ? (string) (int) ($metrics['whales'] ?? 0) : '—') ?></td>
                                     <td data-label="Members"><?= h(isset($alliance['members']) ? (string) $alliance['members'] : '—') ?></td>
                                 </tr>
                             <?php endforeach; ?>
