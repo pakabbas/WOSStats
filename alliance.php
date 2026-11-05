@@ -221,6 +221,9 @@ if ($showRoster) {
                                         <?php if (!empty($member['office'])): ?>
                                             <span class="office-badge"><?= h((string) $member['office']) ?></span>
                                         <?php endif; ?>
+                                        <?php if (!empty($row['is_stale'])): ?>
+                                            <span class="muted roster-stale" title="<?= h((string) ($row['updated_at'] ?? 'never')) ?> UTC">updated <?= h(formatTimeAgo($row['updated_at'] ?? null)) ?></span>
+                                        <?php endif; ?>
                                     </td>
                                     <td data-label="Furnace"><?= h(isset($member['lv']) ? (string) $member['lv'] : '—') ?></td>
                                     <td data-label="24h LV" class="<?= ($lvChange24 ?? 0) > 0 ? 'positive' : ((($lvChange24 ?? 0) < 0) ? 'negative' : '') ?>">

@@ -238,6 +238,16 @@ function fetchAllianceRoster(string $allianceId): ?array
         $source = ($live['partial'] ?? false) ? 'atlas-v2-top20+' . $source : 'atlas-v2';
     }
 
+    if (is_array($payload) && !empty($payload['members'])) {
+        $liveIds = [];
+        foreach ($live['members'] ?? [] as $m) {
+            if (is_array($m) && !empty($m['uid'])) {
+                $liveIds[(string) $m['uid']] = true;
+            }
+        }
+        $payload['members'] = refreshRosterMembersViaPlayers($allianceId, $payload['members'], $liveIds);
+    }
+
     if ($payload === null) {
         return null;
     }
@@ -248,9 +258,21 @@ function fetchAllianceRoster(string $allianceId): ?array
             continue;
         }
         $normalized = normalizeRosterMember($raw);
-        if ($normalized !== null) {
-            $members[] = $normalized;
+        if ($normalized === null) {
+            continue;
         }
+        if ($normalized['seen_at'] === null) {
+            // Legacy import rows: start the 14-day confirmation window now.
+            $normalized['seen_at'] = nowUtc();
+            $normalized['unconfirmed'] = true;
+        } elseif (!empty($raw['unconfirmed'])) {
+            $normalized['unconfirmed'] = true;
+        }
+        $seenTs = rosterTimestamp($normalized['seen_at']);
+        if ($seenTs !== null && (time() - $seenTs) > ROSTER_MEMBER_DROP_SECONDS) {
+            continue; // Not confirmed in the alliance for 14+ days.
+        }
+        $members[] = $normalized;
     }
 
     if ($members === []) {
@@ -304,9 +326,9 @@ function mergeLiveRosterMembers(array $base, array $live): array
             continue;
         }
         $prev = $byId[$id] ?? [];
-        // normalizeRosterMember reads uid/id, nick_name/name, lv, office, x, y, abbr.
-        unset($prev['id'], $prev['name']);
-        $byId[$id] = array_merge($prev, array_filter($m, static fn($v): bool => $v !== null));
+        // normalizeRosterMember reads uid/id, nick_name/name, lv, office, x, y, abbr, power, seen_at.
+        unset($prev['id'], $prev['name'], $prev['unconfirmed']);
+        $byId[$id] = array_merge($prev, array_filter($m, static fn($v): bool => $v !== null), ['seen_at' => nowUtc()]);
     }
     $base['members'] = array_values($byId);
     foreach (['abbr', 'name', 'leaderName'] as $k) {
@@ -316,6 +338,101 @@ function mergeLiveRosterMembers(array $base, array $live): array
     }
 
     return $base;
+}
+
+/**
+ * Refresh up to ROSTER_REFRESH_PER_RUN members not in the live top-20 list via /players/{uid}
+ * (oldest roster-powers fetched_at first). Writes roster-powers; drops members now in another
+ * alliance. Stops on 429 / upstream failure / live-call budget.
+ *
+ * @param list<array<string, mixed>> $members raw roster members
+ * @param array<string, true> $liveIds
+ * @return list<array<string, mixed>>
+ */
+function refreshRosterMembersViaPlayers(string $allianceId, array $members, array $liveIds): array
+{
+    $saved = loadRosterPowers($allianceId);
+    $savedPlayers = is_array($saved['players'] ?? null) ? $saved['players'] : [];
+
+    $candidates = [];
+    foreach ($members as $i => $m) {
+        if (!is_array($m)) {
+            continue;
+        }
+        $uid = (string) ($m['uid'] ?? $m['id'] ?? '');
+        if ($uid === '' || isset($liveIds[$uid]) || preg_match('/^\d+$/', $uid) !== 1) {
+            continue;
+        }
+        $fetched = (string) ($savedPlayers[$uid]['fetched_at'] ?? '');
+        if ($fetched !== '' && ($ts = rosterTimestamp($fetched)) !== null && (time() - $ts) < 3600) {
+            continue; // Refreshed within the last hour.
+        }
+        $candidates[] = [$fetched, $i, $uid];
+    }
+    usort($candidates, static fn(array $a, array $b): int => strcmp($a[0], $b[0]));
+    $candidates = array_slice($candidates, 0, ROSTER_REFRESH_PER_RUN);
+
+    $updates = [];
+    $drop = [];
+    foreach ($candidates as [, $i, $uid]) {
+        try {
+            $res = atlasV2Request('/players/' . $uid, ATLAS_V2_TTL_PLAYER);
+        } catch (Throwable $e) {
+            break; // 429 / budget / network: stop for this run.
+        }
+        if (!empty($res['stale'])) {
+            break; // Upstream refused (e.g. 429); cached fallback is not fresh data.
+        }
+        if (($res['status'] ?? 0) !== 200 || !is_array($res['body'] ?? null)) {
+            continue;
+        }
+        $p = $res['body'];
+        $fetchedAt = !empty($res['cached']) && !empty($res['fetched_at']) ? (string) $res['fetched_at'] : nowUtc();
+        $aid = isset($p['alliance_id']) && $p['alliance_id'] !== '' ? (string) $p['alliance_id'] : null;
+        $updates[$uid] = [
+            'name' => $p['name'] ?? null,
+            'power' => isset($p['power']) ? (int) $p['power'] : null,
+            'stove_lv' => isset($p['hq_level']) ? (int) $p['hq_level'] : null,
+            'fetched_at' => $fetchedAt,
+            'source' => 'atlas-v2-player',
+            'alliance_id' => $aid,
+        ];
+        if ($aid !== $allianceId) {
+            $drop[$uid] = true;
+            continue;
+        }
+        $m = $members[$i];
+        unset($m['unconfirmed']);
+        if (!empty($p['name'])) {
+            $m['nick_name'] = $p['name'];
+            unset($m['name']);
+        }
+        if (isset($p['hq_level'])) {
+            $m['lv'] = (int) $p['hq_level'];
+        }
+        if (isset($p['power'])) {
+            $m['power'] = (int) $p['power'];
+        }
+        $m['seen_at'] = $fetchedAt;
+        $members[$i] = $m;
+    }
+
+    if ($updates !== []) {
+        saveRosterPowers($allianceId, $updates, 'atlas-v2-player');
+    }
+
+    // Also drop members a previous refresh already saw in another alliance.
+    foreach ($savedPlayers as $uid => $sp) {
+        if (!isset($liveIds[(string) $uid]) && !isset($updates[(string) $uid]) && is_array($sp)
+            && array_key_exists('alliance_id', $sp) && (string) ($sp['alliance_id'] ?? '') !== $allianceId) {
+            $drop[(string) $uid] = true;
+        }
+    }
+
+    return array_values(array_filter($members, static function ($m) use ($drop): bool {
+        $uid = is_array($m) ? (string) ($m['uid'] ?? $m['id'] ?? '') : '';
+        return !isset($drop[$uid]);
+    }));
 }
 
 function loadRosterImportPayload(string $allianceId, string $tag): ?array

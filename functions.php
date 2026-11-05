@@ -52,6 +52,13 @@ const APP_ADMIN_VISITS_DENIED_USERNAMES = [
 ];
 
 /** Alliance IDs that keep a member roster / progress table. */
+/** Roster rows older than this show "updated X ago". */
+const ROSTER_STALE_DISPLAY_SECONDS = 48 * 3600;
+/** Members not confirmed (live list or /players/{uid}) for this long are dropped from the roster. */
+const ROSTER_MEMBER_DROP_SECONDS = 14 * 24 * 3600;
+/** Non-top-20 members refreshed via /players/{uid} per collector run, per alliance. */
+const ROSTER_REFRESH_PER_RUN = 15;
+
 const TRACKED_ROSTER_ALLIANCES = [
     '4627000048' => 'AOC',
     '4627000232' => 'WaS',
@@ -2280,7 +2287,41 @@ function normalizeRosterMember(array $member): ?array
         'x' => $x !== null ? (int) $x : null,
         'y' => $y !== null ? (int) $y : null,
         'abbr' => isset($member['abbr']) ? (string) $member['abbr'] : null,
+        'power' => isset($member['power']) && $member['power'] !== null && $member['power'] !== ''
+            ? (int) $member['power']
+            : null,
+        'seen_at' => !empty($member['seen_at']) ? (string) $member['seen_at'] : null,
     ];
+}
+
+/**
+ * Compact "X ago" label for a UTC datetime string.
+ */
+function formatTimeAgo(?string $datetime): string
+{
+    $ts = $datetime !== null && $datetime !== '' ? strtotime($datetime . ' UTC') : false;
+    if ($ts === false) {
+        return 'unknown';
+    }
+    $diff = max(0, time() - $ts);
+    if ($diff < 3600) {
+        return max(1, intdiv($diff, 60)) . 'm ago';
+    }
+    if ($diff < 86400) {
+        return intdiv($diff, 3600) . 'h ago';
+    }
+
+    return intdiv($diff, 86400) . 'd ago';
+}
+
+function rosterTimestamp(mixed $value): ?int
+{
+    if (!is_string($value) || $value === '') {
+        return null;
+    }
+    $ts = strtotime($value . ' UTC');
+
+    return $ts === false ? null : $ts;
 }
 
 function loadAllianceRoster(string $allianceId): array
@@ -2416,6 +2457,7 @@ function saveRosterPowers(string $allianceId, array $playersByUid, string $sourc
             'last_jump_pct' => $player['last_jump_pct'] ?? ($prev['last_jump_pct'] ?? null),
             'fetched_at' => $player['fetched_at'] ?? nowUtc(),
             'source' => $player['source'] ?? $source,
+            'alliance_id' => $player['alliance_id'] ?? ($prev['alliance_id'] ?? null),
         ];
     }
 
@@ -2465,9 +2507,22 @@ function buildRosterProgressRows(
             ? $savedPowers[$id]
             : null;
 
+        // Freshest wins: live roster value (seen_at) > roster-powers only when newer (fetched_at) > state top 200.
+        // Legacy import rows carry a placeholder seen_at until a refresh confirms them.
+        $seenTs = empty($member['unconfirmed']) ? rosterTimestamp($member['seen_at'] ?? null) : null;
+        $savedTs = rosterTimestamp($saved['fetched_at'] ?? null);
+        $savedIsNewer = $savedTs !== null && ($seenTs === null || $savedTs > $seenTs);
+        $updatedTs = null;
+
         $power = null;
-        if (isset($saved['power']) && $saved['power'] !== null && $saved['power'] !== '') {
-            $power = (int) $saved['power'];
+        $memberPower = isset($member['power']) && $member['power'] !== null && $member['power'] !== '' ? (int) $member['power'] : null;
+        $savedPower = isset($saved['power']) && $saved['power'] !== null && $saved['power'] !== '' ? (int) $saved['power'] : null;
+        if ($savedPower !== null && ($savedIsNewer || $memberPower === null)) {
+            $power = $savedPower;
+            $updatedTs = $savedTs;
+        } elseif ($memberPower !== null) {
+            $power = $memberPower;
+            $updatedTs = $seenTs;
         } elseif (isset($statePlayer['power'])) {
             $power = (int) $statePlayer['power'];
         }
@@ -2479,11 +2534,11 @@ function buildRosterProgressRows(
             $jump = (float) $statePlayer['last_jump_pct'];
         }
 
-        $stove = $member['lv'] ?? null;
-        if (isset($saved['stove_lv']) && $saved['stove_lv'] !== null && $saved['stove_lv'] !== '') {
-            $stove = (int) $saved['stove_lv'];
-            $member['lv'] = $stove;
+        if ($savedIsNewer && isset($saved['stove_lv']) && $saved['stove_lv'] !== null && $saved['stove_lv'] !== '') {
+            $member['lv'] = (int) $saved['stove_lv'];
         }
+        $freshest = max($seenTs ?? 0, $savedTs ?? 0, $updatedTs ?? 0);
+        $updatedAt = $freshest > 0 ? gmdate('Y-m-d H:i:s', $freshest) : null;
 
         $rows[] = [
             'member' => $member,
@@ -2495,6 +2550,8 @@ function buildRosterProgressRows(
                 : null,
             'last_jump_pct' => $jump,
             'state_rank' => isset($statePlayer['rank']) ? (int) $statePlayer['rank'] : null,
+            'updated_at' => $updatedAt,
+            'is_stale' => $updatedAt === null || (time() - $freshest) > ROSTER_STALE_DISPLAY_SECONDS,
         ];
     }
 
