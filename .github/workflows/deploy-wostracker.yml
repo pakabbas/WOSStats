@@ -46,14 +46,14 @@ jobs:
             exit 1
           fi
           install -m 700 -d ~/.ssh
-          printf '%s' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/deploy_key
           if ! grep -q 'BEGIN OPENSSH PRIVATE KEY' ~/.ssh/deploy_key; then
             echo "Invalid HOSTINGER_SSH_PRIVATE_KEY: include BEGIN/END lines and line breaks"
             exit 1
           fi
           chmod 600 ~/.ssh/deploy_key
           eval "$(ssh-agent -s)"
-          if ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null 2>&1; then
+          if ssh-keygen -y -P "" -f ~/.ssh/deploy_key >/dev/null 2>&1; then
             echo "Using unencrypted deploy key"
             ssh-add ~/.ssh/deploy_key
           elif [[ -z "${SSH_PASSPHRASE}" ]]; then
