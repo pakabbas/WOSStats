@@ -190,6 +190,22 @@
 
     let playerSortKey = '';
     let playerSortDir = 'asc';
+    const playerSortKeys = new Set([
+        'rank', 'name', 'tag', 'power', 'change24', 'pct24', 'furnace', 'jump', 'id',
+    ]);
+
+    function syncPlayerSortUrl(key, dir) {
+        if (!key || !playerSortKeys.has(key) || (dir !== 'asc' && dir !== 'desc')) {
+            return;
+        }
+        const url = new URL(window.location.href);
+        url.searchParams.set('sort', key);
+        url.searchParams.set('dir', dir);
+        const next = url.pathname + url.search + url.hash;
+        if (next !== window.location.pathname + window.location.search + window.location.hash) {
+            window.history.replaceState(null, '', next);
+        }
+    }
 
     function playerRowSortValue(row, key, type) {
         const raw = row.dataset[key] ?? '';
@@ -241,7 +257,10 @@
         rows.forEach((row) => tbody.appendChild(row));
     }
 
-    function setPlayerSort(key, dir) {
+    function setPlayerSort(key, dir, updateUrl) {
+        if (!playerTable || !key || !playerSortKeys.has(key) || (dir !== 'asc' && dir !== 'desc')) {
+            return;
+        }
         playerSortKey = key;
         playerSortDir = dir;
         playerTable.querySelectorAll('thead th[aria-sort]').forEach((th) => {
@@ -252,12 +271,15 @@
             );
         });
         applyPlayerSort();
+        if (updateUrl !== false) {
+            syncPlayerSortUrl(key, dir);
+        }
     }
 
     playerTable?.querySelectorAll('.th-sort').forEach((button) => {
         button.addEventListener('click', () => {
             const key = button.dataset.key || '';
-            if (!key) {
+            if (!key || !playerSortKeys.has(key)) {
                 return;
             }
             const nextDir = playerSortKey === key
@@ -266,6 +288,16 @@
             setPlayerSort(key, nextDir);
         });
     });
+
+    if (playerTable) {
+        const sortParams = new URLSearchParams(window.location.search);
+        const sortFromUrl = (sortParams.get('sort') || '').trim();
+        const dirFromUrl = (sortParams.get('dir') || '').trim().toLowerCase();
+        if (playerSortKeys.has(sortFromUrl) && (dirFromUrl === 'asc' || dirFromUrl === 'desc')) {
+            // Apply shared sort from GET params; keep URL as-is (no rewrite).
+            setPlayerSort(sortFromUrl, dirFromUrl, false);
+        }
+    }
 
     // Runtime alliance tags for the players board (batched + server-cached).
     async function fillPlayerAllianceTags() {
