@@ -42,6 +42,20 @@ uksort(
     $allianceTagCounts,
     static fn(string $a, string $b): int => strcasecmp($a, $b)
 );
+
+$furnaceLevelCounts = [];
+foreach ($players as $player) {
+    $stove = $player['stove_lv'] ?? null;
+    if ($stove === null || $stove === '') {
+        continue;
+    }
+    $stove = (int) $stove;
+    if ($stove <= 0) {
+        continue;
+    }
+    $furnaceLevelCounts[$stove] = ($furnaceLevelCounts[$stove] ?? 0) + 1;
+}
+krsort($furnaceLevelCounts, SORT_NUMERIC);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -80,6 +94,20 @@ uksort(
                 <span class="stat-value stat-value-small"><?= h(formatDisplayDateOnly($lastUpdated)) ?></span>
             </div>
         </section>
+
+        <?php if ($furnaceLevelCounts !== []): ?>
+        <section class="stat-card furnace-levels-card" aria-label="Furnace level counts">
+            <span class="stat-label">Furnace Levels</span>
+            <div class="furnace-level-counts">
+                <?php foreach ($furnaceLevelCounts as $stoveLv => $furnaceCount): ?>
+                    <div class="furnace-level-count">
+                        <span class="furnace-level-count-label"><?= h(formatFurnaceLevel((int) $stoveLv)) ?></span>
+                        <span class="furnace-level-count-value"><?= (int) $furnaceCount ?></span>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </section>
+        <?php endif; ?>
 
         <section class="panel">
             <div class="panel-toolbar">

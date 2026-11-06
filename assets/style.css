@@ -534,6 +534,45 @@ body.nav-drawer-open {
     font-weight: 600;
 }
 
+.furnace-levels-card {
+    margin-bottom: 1.35rem;
+}
+
+.furnace-level-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.65rem;
+    margin-top: 0.15rem;
+}
+
+.furnace-level-count {
+    display: flex;
+    flex-direction: column;
+    gap: 0.12rem;
+    min-width: 4.4rem;
+    padding: 0.4rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: rgba(7, 11, 18, 0.35);
+}
+
+.furnace-level-count-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.furnace-level-count-value {
+    font-family: var(--font-display);
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.1;
+}
+
 .panel {
     background: var(--surface);
     border: 1px solid var(--border);
