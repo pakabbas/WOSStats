@@ -208,14 +208,7 @@ $allianceId = $result !== null ? trim((string) ($result['alliance_id'] ?? '')) :
         <?php if ($searchMode === 'name' && $queryName !== ''): ?>
             <p class="muted player-search-note">
                 Name search only covers players this site has already seen (top board, tracked rosters,
-                and earlier WOS Atlas lookups). Not here?
-                <a href="<?= h(atlasV2WebSearchUrl($queryName)) ?>" target="_blank" rel="noopener">Search “<?= h($queryName) ?>” on WOS Atlas</a>,
-                then paste the Chief ID above.
-            </p>
-        <?php elseif ($searchMode === 'uid' && $result === null && $queryUid !== ''): ?>
-            <p class="muted player-search-note">
-                WOS Atlas looks players up by its own UID; some in-game IDs are only known to it as an alternate ID.
-                <a href="<?= h(atlasV2WebSearchUrl($queryUid)) ?>" target="_blank" rel="noopener">Try this ID on WOS Atlas</a>.
+                and earlier lookups). If they are not listed, try a Chief ID above.
             </p>
         <?php endif; ?>
 

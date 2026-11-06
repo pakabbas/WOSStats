@@ -188,7 +188,7 @@
     playerAllianceFilter?.addEventListener('input', applyPlayerFilter);
     applyPlayerFilter();
 
-    // Runtime WOS Atlas alliance tags for the players board (batched + server-cached).
+    // Runtime alliance tags for the players board (batched + server-cached).
     async function fillPlayerAllianceTags() {
         if (!playerTable) {
             return;

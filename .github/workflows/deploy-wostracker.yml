@@ -110,6 +110,7 @@ jobs:
             --exclude 'uploads/incidents/*' \
             --exclude 'uploads/cache/' \
             --exclude 'Requirements.md' \
+            --exclude 'README.md' \
             --exclude 'deploy.sh' \
             --exclude 'scripts/' \
             --exclude 'ssh.txt.example' \
@@ -126,6 +127,7 @@ jobs:
             "cd '${HOSTINGER_DEPLOY_PATH}' && \
              mkdir -p data uploads/video uploads/chat uploads/incidents && \
              chmod 755 data uploads && \
+             rm -f README.md && \
              if [ ! -f config.json ]; then \
                echo 'WARNING: config.json missing on server — create it before relying on NAP/admin features'; \
              fi"
