@@ -2017,17 +2017,17 @@ function renderSiteNav(?string $active = null): void
             <a class="nav-link <?= $active === 'alliances' || $active === 'alliance' ? 'is-active' : '' ?>" href="<?= h($base) ?>index.php">Alliances</a>
             <a class="nav-link <?= $active === 'players' ? 'is-active' : '' ?>" href="<?= h($base) ?>players.php">Players</a>
             <a class="nav-link <?= $active === 'nap-rules' ? 'is-active' : '' ?>" href="<?= h($base) ?>nap-rules.php">Rules</a>
-            <a class="nav-link <?= $active === 'announcements' ? 'is-active' : '' ?>" href="<?= h($base) ?>announcements.php">Announcements</a>
             <a class="nav-link nav-link-svs <?= $active === 'svs-4642' ? 'is-active' : '' ?>" href="<?= h($base) ?>state-4642.php">SvS 4642</a>
-            <div class="nav-more <?= ($active === 'compare' || $active === 'threat' || $active === 'svs-4642') ? 'has-active' : '' ?>">
+            <div class="nav-more <?= ($active === 'compare' || $active === 'threat' || $active === 'svs-4642' || $active === 'announcements') ? 'has-active' : '' ?>">
                 <button
                     type="button"
-                    class="nav-link nav-more-toggle <?= ($active === 'compare' || $active === 'threat') ? 'is-active' : '' ?>"
+                    class="nav-link nav-more-toggle <?= ($active === 'compare' || $active === 'threat' || $active === 'announcements') ? 'is-active' : '' ?>"
                     id="nav-more-toggle"
                     aria-expanded="false"
                     aria-controls="nav-more-menu"
                 >More</button>
                 <div class="nav-more-menu" id="nav-more-menu" hidden>
+                    <a class="nav-more-item <?= $active === 'announcements' ? 'is-active' : '' ?>" href="<?= h($base) ?>announcements.php">Announcements</a>
                     <a class="nav-more-item <?= $active === 'compare' ? 'is-active' : '' ?>" href="<?= h($base) ?>compare.php">Compare</a>
                     <a class="nav-more-item <?= $active === 'threat' ? 'is-active' : '' ?>" href="<?= h($base) ?>threat-board.php">Threat Metric</a>
                     <a class="nav-more-item <?= $active === 'svs-4642' ? 'is-active' : '' ?>" href="<?= h($base) ?>state-4642.php">State 4642</a>
@@ -2087,8 +2087,8 @@ function renderSiteNav(?string $active = null): void
                 <a class="nav-drawer-link <?= $active === 'alliances' || $active === 'alliance' ? 'is-active' : '' ?>" href="<?= h($base) ?>index.php">Alliances</a>
                 <a class="nav-drawer-link <?= $active === 'players' ? 'is-active' : '' ?>" href="<?= h($base) ?>players.php">Players</a>
                 <a class="nav-drawer-link <?= $active === 'nap-rules' ? 'is-active' : '' ?>" href="<?= h($base) ?>nap-rules.php">Rules</a>
-                <a class="nav-drawer-link <?= $active === 'announcements' ? 'is-active' : '' ?>" href="<?= h($base) ?>announcements.php">Announcements</a>
                 <p class="nav-drawer-section">More</p>
+                <a class="nav-drawer-link <?= $active === 'announcements' ? 'is-active' : '' ?>" href="<?= h($base) ?>announcements.php">Announcements</a>
                 <a class="nav-drawer-link <?= $active === 'svs-4642' ? 'is-active' : '' ?>" href="<?= h($base) ?>state-4642.php">State 4642 · SvS</a>
                 <a class="nav-drawer-link <?= $active === 'compare' ? 'is-active' : '' ?>" href="<?= h($base) ?>compare.php">Compare</a>
                 <a class="nav-drawer-link <?= $active === 'threat' ? 'is-active' : '' ?>" href="<?= h($base) ?>threat-board.php">Threat Metric</a>
