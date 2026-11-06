@@ -188,6 +188,85 @@
     playerAllianceFilter?.addEventListener('input', applyPlayerFilter);
     applyPlayerFilter();
 
+    let playerSortKey = '';
+    let playerSortDir = 'asc';
+
+    function playerRowSortValue(row, key, type) {
+        const raw = row.dataset[key] ?? '';
+        if (raw === '') {
+            return null;
+        }
+        if (type === 'text') {
+            return raw;
+        }
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : null;
+    }
+
+    function applyPlayerSort() {
+        if (!playerTable || !playerSortKey) {
+            return;
+        }
+        const headerBtn = playerTable.querySelector('.th-sort[data-key="' + playerSortKey + '"]');
+        const type = headerBtn?.dataset.type || 'num';
+        const tbody = playerTable.tBodies[0];
+        if (!tbody) {
+            return;
+        }
+        const rows = Array.from(tbody.querySelectorAll('tr[data-name]'));
+        rows.sort((a, b) => {
+            const av = playerRowSortValue(a, playerSortKey, type);
+            const bv = playerRowSortValue(b, playerSortKey, type);
+            const aEmpty = av === null;
+            const bEmpty = bv === null;
+            if (aEmpty && bEmpty) {
+                return 0;
+            }
+            if (aEmpty) {
+                return 1;
+            }
+            if (bEmpty) {
+                return -1;
+            }
+            let cmp = 0;
+            if (type === 'text') {
+                cmp = String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
+            } else if (av < bv) {
+                cmp = -1;
+            } else if (av > bv) {
+                cmp = 1;
+            }
+            return playerSortDir === 'asc' ? cmp : -cmp;
+        });
+        rows.forEach((row) => tbody.appendChild(row));
+    }
+
+    function setPlayerSort(key, dir) {
+        playerSortKey = key;
+        playerSortDir = dir;
+        playerTable.querySelectorAll('thead th[aria-sort]').forEach((th) => {
+            const btn = th.querySelector('.th-sort');
+            th.setAttribute(
+                'aria-sort',
+                btn && btn.dataset.key === key ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'
+            );
+        });
+        applyPlayerSort();
+    }
+
+    playerTable?.querySelectorAll('.th-sort').forEach((button) => {
+        button.addEventListener('click', () => {
+            const key = button.dataset.key || '';
+            if (!key) {
+                return;
+            }
+            const nextDir = playerSortKey === key
+                ? (playerSortDir === 'asc' ? 'desc' : 'asc')
+                : (button.dataset.default || 'asc');
+            setPlayerSort(key, nextDir);
+        });
+    });
+
     // Runtime alliance tags for the players board (batched + server-cached).
     async function fillPlayerAllianceTags() {
         if (!playerTable) {
@@ -296,10 +375,12 @@
             }
             rebuildPlayerAllianceFilterOptions();
             applyPlayerFilter();
+            applyPlayerSort();
         }
 
         rebuildPlayerAllianceFilterOptions();
         applyPlayerFilter();
+        applyPlayerSort();
 
         try {
             window.localStorage.setItem(dayKey, today);

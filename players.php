@@ -108,15 +108,15 @@ uksort(
                 <table class="alliance-table responsive-table" id="player-table">
                     <thead>
                         <tr>
-                            <th>Rank</th>
-                            <th>Player</th>
-                            <th>Alliance</th>
-                            <th>Power</th>
-                            <th>24h</th>
-                            <th>24h %</th>
-                            <th>Furnace</th>
-                            <th>Jump</th>
-                            <th>UID</th>
+                            <th aria-sort="none"><button type="button" class="th-sort" data-key="rank" data-type="num" data-default="asc">Rank</button></th>
+                            <th aria-sort="none"><button type="button" class="th-sort" data-key="name" data-type="text" data-default="asc">Player</button></th>
+                            <th aria-sort="none"><button type="button" class="th-sort" data-key="tag" data-type="text" data-default="asc">Alliance</button></th>
+                            <th aria-sort="none"><button type="button" class="th-sort" data-key="power" data-type="num" data-default="desc">Power</button></th>
+                            <th aria-sort="none"><button type="button" class="th-sort" data-key="change24" data-type="num" data-default="desc">24h</button></th>
+                            <th aria-sort="none"><button type="button" class="th-sort" data-key="pct24" data-type="num" data-default="desc">24h %</button></th>
+                            <th aria-sort="none"><button type="button" class="th-sort" data-key="furnace" data-type="num" data-default="desc">Furnace</button></th>
+                            <th aria-sort="none"><button type="button" class="th-sort" data-key="jump" data-type="num" data-default="desc">Jump</button></th>
+                            <th aria-sort="none"><button type="button" class="th-sort" data-key="id" data-type="num" data-default="asc">UID</button></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -136,6 +136,9 @@ uksort(
                                 $savedTag = trim((string) ($player['alliance_tag'] ?? ''));
                                 $savedAid = trim((string) ($player['alliance_id'] ?? ''));
                                 $needsLookup = $savedTag === '';
+                                $powerVal = isset($player['power']) ? (int) $player['power'] : null;
+                                $furnaceVal = $player['stove_lv'] ?? null;
+                                $jumpVal = $player['last_jump_pct'] ?? null;
                                 ?>
                                 <tr
                                     data-name="<?= h(strtolower((string) ($player['name'] ?? ''))) ?>"
@@ -143,6 +146,11 @@ uksort(
                                     data-rank="<?= h((string) ($player['rank'] ?? '')) ?>"
                                     data-tag="<?= h(strtolower($savedTag)) ?>"
                                     data-tag-label="<?= h($savedTag) ?>"
+                                    data-power="<?= $powerVal !== null ? h((string) $powerVal) : '' ?>"
+                                    data-change24="<?= $powerChange24 !== null ? h((string) $powerChange24) : '' ?>"
+                                    data-pct24="<?= $powerPct24 !== null ? h((string) $powerPct24) : '' ?>"
+                                    data-furnace="<?= $furnaceVal !== null && $furnaceVal !== '' ? h((string) $furnaceVal) : '' ?>"
+                                    data-jump="<?= $jumpVal !== null && $jumpVal !== '' ? h((string) $jumpVal) : '' ?>"
                                 >
                                     <td data-label="Rank"><?= h((string) ($player['rank'] ?? '—')) ?></td>
                                     <td data-label="Player"><?= h((string) ($player['name'] ?? 'Unknown')) ?></td>

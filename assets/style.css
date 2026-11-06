@@ -923,6 +923,48 @@ body.nav-drawer-open {
     font-weight: 700;
 }
 
+.alliance-table th .th-sort {
+    appearance: none;
+    background: none;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0;
+    width: 100%;
+    text-align: inherit;
+}
+
+.alliance-table th .th-sort::after {
+    content: "\2195";
+    opacity: 0.38;
+    font-size: 0.85em;
+    line-height: 1;
+}
+
+.alliance-table th[aria-sort="ascending"] .th-sort::after,
+.alliance-table th[aria-sort="descending"] .th-sort::after {
+    opacity: 1;
+    color: var(--accent, #5ec8ff);
+}
+
+.alliance-table th[aria-sort="ascending"] .th-sort::after {
+    content: "\25B2";
+}
+
+.alliance-table th[aria-sort="descending"] .th-sort::after {
+    content: "\25BC";
+}
+
+.alliance-table th:has(.th-sort):hover {
+    color: var(--text);
+}
+
 .alliance-table tbody tr:last-child td {
     border-bottom: none;
 }
@@ -2456,6 +2498,35 @@ code {
 
     .table-wrap {
         border: none;
+    }
+
+    #player-table.responsive-table thead {
+        display: block;
+    }
+
+    #player-table.responsive-table thead tr {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        width: 100%;
+        background: transparent;
+        border: none;
+        border-radius: 0;
+        padding: 0.75rem 0.75rem 0;
+    }
+
+    #player-table.responsive-table thead th {
+        display: block;
+        width: auto;
+        background: rgba(0, 0, 0, 0.35);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 0.38rem 0.75rem;
+        white-space: nowrap;
+    }
+
+    #player-table.responsive-table thead th .th-sort {
+        width: auto;
     }
 
     .nap-row {
