@@ -551,8 +551,40 @@ body.nav-drawer-open {
 .furnace-levels-head {
     display: flex;
     align-items: center;
-    gap: 0.7rem;
+    flex-wrap: wrap;
+    gap: 0.55rem 0.7rem;
     margin-bottom: 0.85rem;
+}
+
+.furnace-filter-meta {
+    margin-left: auto;
+    font-size: 0.78rem;
+    color: var(--muted, #9bb0c7);
+    letter-spacing: 0.01em;
+}
+
+.furnace-filter-clear {
+    appearance: none;
+    border: 1px solid rgba(125, 168, 210, 0.28);
+    background: rgba(10, 16, 26, 0.55);
+    color: #e8eef7;
+    border-radius: 999px;
+    padding: 0.28rem 0.75rem;
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.furnace-filter-clear:hover,
+.furnace-filter-clear:focus-visible {
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    background: rgba(94, 200, 255, 0.12);
+    color: #fff;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(94, 200, 255, 0.18);
 }
 
 .furnace-levels-mark {
@@ -624,6 +656,7 @@ body.nav-drawer-open {
 .furnace-level-count {
     --tile-color: #8b9bb3;
     --tile-glow: rgba(139, 155, 179, 0.2);
+    appearance: none;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -637,6 +670,57 @@ body.nav-drawer-open {
     box-shadow:
         inset 0 1px 0 rgba(255, 255, 255, 0.06),
         0 0 16px var(--tile-glow);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease, background 0.15s ease;
+}
+
+.furnace-level-count:hover,
+.furnace-level-count:focus-visible {
+    border-color: color-mix(in srgb, var(--tile-color) 78%, #fff);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.08),
+        0 0 20px var(--tile-glow),
+        0 0 0 2px color-mix(in srgb, var(--tile-color) 28%, transparent);
+    outline: none;
+    transform: translateY(-1px);
+}
+
+.furnace-level-count.is-selected,
+.furnace-level-count[aria-pressed="true"] {
+    border-color: var(--tile-color);
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--tile-color) 34%, transparent), rgba(7, 11, 18, 0.28));
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.12),
+        0 0 24px color-mix(in srgb, var(--tile-glow) 85%, transparent),
+        0 0 0 2px color-mix(in srgb, var(--tile-color) 55%, transparent);
+    transform: translateY(-1px);
+}
+
+.furnace-level-count.is-furnace.is-selected,
+.furnace-level-count.is-furnace[aria-pressed="true"] {
+    box-shadow:
+        inset 0 1px 0 rgba(255, 220, 170, 0.18),
+        0 0 26px rgba(255, 138, 61, 0.42),
+        0 0 0 2px rgba(255, 154, 60, 0.7);
+}
+
+.furnace-level-count.is-furnace-plus.is-selected,
+.furnace-level-count.is-furnace-plus[aria-pressed="true"] {
+    box-shadow:
+        inset 0 1px 0 rgba(255, 236, 190, 0.2),
+        0 0 28px rgba(255, 193, 77, 0.48),
+        0 0 0 2px rgba(255, 193, 77, 0.78);
+}
+
+.furnace-level-count.is-crystal.is-selected,
+.furnace-level-count.is-crystal[aria-pressed="true"] {
+    box-shadow:
+        inset 0 1px 0 rgba(230, 248, 255, 0.16),
+        0 0 28px var(--tile-glow),
+        0 0 0 2px color-mix(in srgb, var(--tile-color) 72%, #fff);
 }
 
 .furnace-level-count.is-furnace {

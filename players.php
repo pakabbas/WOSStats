@@ -140,6 +140,8 @@ SVG;
                     <span class="furnace-levels-mark-ice"><?= $furnaceIconSvg(true) ?></span>
                 </span>
                 <span class="stat-label">Furnace Levels</span>
+                <span id="furnace-filter-meta" class="furnace-filter-meta" aria-live="polite"></span>
+                <button type="button" id="furnace-filter-clear" class="furnace-filter-clear" hidden>Clear filters</button>
             </div>
             <?php foreach (['crystal' => 'Crystal', 'furnace' => 'Furnace'] as $groupKey => $groupTitle): ?>
                 <?php if ($furnaceGroups[$groupKey] === []) { continue; } ?>
@@ -164,11 +166,17 @@ SVG;
                                 $tileClasses[] = 'is-furnace';
                             }
                             ?>
-                            <div class="<?= h(implode(' ', $tileClasses)) ?>">
+                            <button
+                                type="button"
+                                class="<?= h(implode(' ', $tileClasses)) ?>"
+                                data-furnace="<?= h((string) ((int) $info['raw'])) ?>"
+                                aria-pressed="false"
+                                title="Filter by <?= h($info['label']) ?>"
+                            >
                                 <span class="furnace-level-icon" aria-hidden="true"><?= $furnaceIconSvg(!empty($info['is_crystal'])) ?></span>
                                 <span class="furnace-level-count-label"><?= h($info['label']) ?></span>
                                 <span class="furnace-level-count-value"><?= (int) $tile['count'] ?></span>
-                            </div>
+                            </button>
                         <?php endforeach; ?>
                     </div>
                 </div>

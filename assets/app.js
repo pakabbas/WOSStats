@@ -81,6 +81,53 @@
     const playerSearch = document.getElementById('player-search');
     const playerAllianceFilter = document.getElementById('player-alliance-filter');
     const playerFilterCount = document.getElementById('player-filter-count');
+    const furnaceFilterClear = document.getElementById('furnace-filter-clear');
+    const furnaceFilterMeta = document.getElementById('furnace-filter-meta');
+    const furnaceLevelTiles = Array.from(document.querySelectorAll('.furnace-level-count[data-furnace]'));
+    const selectedFurnaces = new Set();
+
+    function syncFurnaceFilterUrl() {
+        const url = new URL(window.location.href);
+        if (selectedFurnaces.size === 0) {
+            url.searchParams.delete('furnace');
+        } else {
+            const vals = Array.from(selectedFurnaces)
+                .map((v) => Number(v))
+                .filter((n) => Number.isFinite(n) && n > 0)
+                .sort((a, b) => a - b)
+                .map(String);
+            if (vals.length === 0) {
+                url.searchParams.delete('furnace');
+            } else {
+                url.searchParams.set('furnace', vals.join(','));
+            }
+        }
+        const next = url.pathname + url.search + url.hash;
+        if (next !== window.location.pathname + window.location.search + window.location.hash) {
+            window.history.replaceState(null, '', next);
+        }
+    }
+
+    function updateFurnaceFilterUi() {
+        furnaceLevelTiles.forEach((tile) => {
+            const value = (tile.dataset.furnace || '').trim();
+            const selected = value !== '' && selectedFurnaces.has(value);
+            tile.classList.toggle('is-selected', selected);
+            tile.setAttribute('aria-pressed', selected ? 'true' : 'false');
+        });
+        if (furnaceFilterClear) {
+            furnaceFilterClear.hidden = selectedFurnaces.size === 0;
+        }
+        if (furnaceFilterMeta) {
+            if (selectedFurnaces.size === 0) {
+                furnaceFilterMeta.textContent = '';
+            } else if (selectedFurnaces.size === 1) {
+                furnaceFilterMeta.textContent = '1 level selected';
+            } else {
+                furnaceFilterMeta.textContent = selectedFurnaces.size + ' levels selected';
+            }
+        }
+    }
 
     function applyPlayerFilter() {
         if (!playerTable) {
@@ -90,6 +137,7 @@
         const query = (playerSearch?.value || '').trim().toLowerCase();
         const alliance = (playerAllianceFilter?.value || '').trim().toLowerCase();
         const allianceFilterActive = alliance !== '';
+        const furnaceFilterActive = selectedFurnaces.size > 0;
         // When filtering by alliance, only use top 100 of the board (not full 200).
         const maxRankWhenAllianceFiltered = 100;
         let visible = 0;
@@ -101,6 +149,7 @@
             const id = row.dataset.id || '';
             const tag = (row.dataset.tag || '').trim().toLowerCase();
             const rank = parseInt(row.dataset.rank || '0', 10) || 0;
+            const furnace = (row.dataset.furnace || '').trim();
             const matchesSearch = !query || name.includes(query) || id.includes(query) || tag.includes(query);
             let matchesAlliance = true;
             if (alliance === '__none__') {
@@ -108,8 +157,9 @@
             } else if (alliance) {
                 matchesAlliance = tag === alliance;
             }
+            const matchesFurnace = !furnaceFilterActive || selectedFurnaces.has(furnace);
             const inTopScope = !allianceFilterActive || rank <= 0 || rank <= maxRankWhenAllianceFiltered;
-            const show = matchesSearch && matchesAlliance && inTopScope;
+            const show = matchesSearch && matchesAlliance && matchesFurnace && inTopScope;
             row.hidden = !show;
             // Class backup: mobile responsive-table sets display:block on tr,
             // which can override the HTML hidden attribute in some browsers.
@@ -122,9 +172,9 @@
         if (playerFilterCount) {
             if (total === 0) {
                 playerFilterCount.textContent = '';
-            } else if (visible === total && !query && !alliance) {
+            } else if (visible === total && !query && !alliance && !furnaceFilterActive) {
                 playerFilterCount.textContent = total + ' players';
-            } else if (allianceFilterActive) {
+            } else if (allianceFilterActive && !furnaceFilterActive && !query) {
                 playerFilterCount.textContent = visible + ' in top 100';
             } else {
                 playerFilterCount.textContent = visible + ' of ' + total;
@@ -186,6 +236,53 @@
     playerSearch?.addEventListener('input', applyPlayerFilter);
     playerAllianceFilter?.addEventListener('change', applyPlayerFilter);
     playerAllianceFilter?.addEventListener('input', applyPlayerFilter);
+
+    furnaceLevelTiles.forEach((tile) => {
+        tile.addEventListener('click', () => {
+            const value = (tile.dataset.furnace || '').trim();
+            if (!value || !/^\d+$/.test(value)) {
+                return;
+            }
+            if (selectedFurnaces.has(value)) {
+                selectedFurnaces.delete(value);
+            } else {
+                selectedFurnaces.add(value);
+            }
+            updateFurnaceFilterUi();
+            syncFurnaceFilterUrl();
+            applyPlayerFilter();
+        });
+    });
+
+    furnaceFilterClear?.addEventListener('click', () => {
+        if (selectedFurnaces.size === 0) {
+            return;
+        }
+        selectedFurnaces.clear();
+        updateFurnaceFilterUi();
+        syncFurnaceFilterUrl();
+        applyPlayerFilter();
+    });
+
+    if (furnaceLevelTiles.length > 0) {
+        const furnaceParams = new URLSearchParams(window.location.search);
+        const furnaceFromUrl = (furnaceParams.get('furnace') || '').trim();
+        const validFurnaceValues = new Set(
+            furnaceLevelTiles
+                .map((tile) => (tile.dataset.furnace || '').trim())
+                .filter((value) => /^\d+$/.test(value))
+        );
+        if (furnaceFromUrl) {
+            furnaceFromUrl.split(',').forEach((part) => {
+                const value = part.trim();
+                if (validFurnaceValues.has(value)) {
+                    selectedFurnaces.add(value);
+                }
+            });
+        }
+        updateFurnaceFilterUi();
+    }
+
     applyPlayerFilter();
 
     let playerSortKey = '';
