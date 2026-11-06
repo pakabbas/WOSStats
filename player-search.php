@@ -355,7 +355,7 @@ $allianceId = $result !== null ? trim((string) ($result['alliance_id'] ?? '')) :
                     </div>
                     <div class="stat-card">
                         <span class="stat-label">Furnace</span>
-                        <span class="stat-value"><?= h(isset($result['stove_lv']) ? (string) $result['stove_lv'] : '—') ?></span>
+                        <span class="stat-value"><?= h(isset($result['stove_lv']) ? formatFurnaceLevel((int) $result['stove_lv']) : '—') ?></span>
                     </div>
                 </div>
 
@@ -443,9 +443,9 @@ $allianceId = $result !== null ? trim((string) ($result['alliance_id'] ?? '')) :
                             <tr>
                                 <th scope="row">Furnace / LV</th>
                                 <td>
-                                    <?= h(isset($result['stove_lv']) ? (string) $result['stove_lv'] : '—') ?>
+                                    <?= h(isset($result['stove_lv']) ? formatFurnaceLevel((int) $result['stove_lv']) : '—') ?>
                                     <?php if (isset($result['lv'])): ?>
-                                        <span class="muted">· roster LV <?= h((string) $result['lv']) ?></span>
+                                        <span class="muted">· roster LV <?= h(formatFurnaceLevel((int) $result['lv'])) ?></span>
                                     <?php endif; ?>
                                 </td>
                             </tr>

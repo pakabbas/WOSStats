@@ -278,7 +278,7 @@ function svsEdgeBadge(string $edge): string
             <div class="stat-card">
                 <span class="stat-label">Avg furnace scale (top 100)</span>
                 <span class="stat-value"><?= h(isset($us['avg_furnace_top100']) ? number_format((float) $us['avg_furnace_top100'], 2) : '—') ?> <span class="muted">vs</span> <?= h(isset($them['avg_furnace_top100']) ? number_format((float) $them['avg_furnace_top100'], 2) : '—') ?></span>
-                <span class="muted svs-furnace-note">API scale · 31+ = Crystal</span>
+                <span class="muted svs-furnace-note">31–34 = 30.1–30.4 · 35+ = Crystal</span>
             </div>
         </section>
 
@@ -433,12 +433,12 @@ function svsEdgeBadge(string $edge): string
             <div class="panel">
                 <h2>Furnace / Crystal distribution</h2>
                 <p class="muted panel-subtitle">
-                    Atlas stove level on the tracked board. After 30: every +5 = one Crystal tier
-                    (33 = Crystal 1.3, 40 = Crystal 2.5).
+                    Furnace level on the tracked board. After 30 come 30.1–30.4, then Crystal 1 (35),
+                    Crystal 1.1–1.4, Crystal 2 (40), and so on.
                 </p>
                 <canvas id="svs-furnace-chart" height="220" aria-label="Furnace and Crystal distribution chart"></canvas>
                 <p class="muted svs-furnace-legend">
-                    Labels use Crystal notation when API level &gt; 30 (raw Atlas value in parentheses).
+                    Labels use Crystal / 30.x notation after furnace 30 (stored level in parentheses).
                 </p>
             </div>
         </section>

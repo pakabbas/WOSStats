@@ -172,8 +172,10 @@ function formatPower(?int $power): string
 }
 
 /**
- * Atlas stove/furnace level → player-facing label.
- * API keeps climbing past 30: +5 per Crystal tier (31–35 = C1.1–C1.5, 36–40 = C2.1–C2.5, …).
+ * stove/furnace level → player-facing label.
+ * 1–30 stay Furnace 1–30. Then 31–34 = 30.1–30.4.
+ * From 35 on, every 5 steps is a Crystal tier: 35 = Crystal 1,
+ * 36–39 = Crystal 1.1–1.4, 40 = Crystal 2, and so on.
  *
  * @return array{raw: int, label: string, short: string, is_crystal: bool, crystal_tier: ?int, crystal_step: ?int}
  */
@@ -183,28 +185,43 @@ function parseFurnaceLevel(int $level): array
         return [
             'raw' => $level,
             'label' => 'Furnace ' . $level,
-            'short' => 'FC' . $level,
+            'short' => (string) $level,
             'is_crystal' => false,
             'crystal_tier' => null,
             'crystal_step' => null,
         ];
     }
 
-    $past = $level - 30;
-    $tier = (int) ceil($past / 5);
-    $step = (($past - 1) % 5) + 1;
+    if ($level <= 34) {
+        $label = '30.' . ($level - 30);
+
+        return [
+            'raw' => $level,
+            'label' => $label,
+            'short' => $label,
+            'is_crystal' => false,
+            'crystal_tier' => null,
+            'crystal_step' => null,
+        ];
+    }
+
+    $past = $level - 35;
+    $tier = intdiv($past, 5) + 1;
+    $step = $past % 5;
+    $label = $step === 0 ? ('Crystal ' . $tier) : ('Crystal ' . $tier . '.' . $step);
+    $short = $step === 0 ? ('C' . $tier) : ('C' . $tier . '.' . $step);
 
     return [
         'raw' => $level,
-        'label' => 'Crystal ' . $tier . '.' . $step,
-        'short' => 'C' . $tier . '.' . $step,
+        'label' => $label,
+        'short' => $short,
         'is_crystal' => true,
         'crystal_tier' => $tier,
-        'crystal_step' => $step,
+        'crystal_step' => $step === 0 ? null : $step,
     ];
 }
 
-/** Human label for Atlas stove_lv / furnace_lv (e.g. 40 → "Crystal 2.5", 33 → "Crystal 1.3"). */
+/** Human label (e.g. 30 → "Furnace 30", 31 → "30.1", 35 → "Crystal 1", 40 → "Crystal 2"). */
 function formatFurnaceLevel(?int $level, bool $short = false): string
 {
     if ($level === null || $level <= 0) {
@@ -215,7 +232,7 @@ function formatFurnaceLevel(?int $level, bool $short = false): string
     return $short ? $info['short'] : $info['label'];
 }
 
-/** Chart/axis label: "C2.5 (40)" for crystal, "FC30" below. */
+/** Chart/axis label: "C2 (40)" / "30.1 (31)" after 30, "30" at or below 30. */
 function formatFurnaceChartLabel(?int $level): string
 {
     if ($level === null || $level <= 0) {
@@ -223,7 +240,7 @@ function formatFurnaceChartLabel(?int $level): string
     }
 
     $info = parseFurnaceLevel($level);
-    if ($info['is_crystal']) {
+    if ($level > 30) {
         return $info['short'] . ' (' . $info['raw'] . ')';
     }
 
@@ -4617,9 +4634,9 @@ function buildSvsInsights(array $us, array $them): array
                 . ' vs ' . formatPower($us['min_top100'] ?? null) . ').';
     }
     if ($fcDiff !== null) {
-        $bullets[] = 'Avg Atlas furnace scale (top 100): 4627 ' . number_format((float) ($us['avg_furnace_top100'] ?? 0), 2)
+        $bullets[] = 'Avg furnace scale (top 100): 4627 ' . number_format((float) ($us['avg_furnace_top100'] ?? 0), 2)
             . ' vs 4642 ' . number_format((float) ($them['avg_furnace_top100'] ?? 0), 2)
-            . ' (Δ ' . ($fcDiff >= 0 ? '+' : '') . $fcDiff . '). Past 30 = Crystal (33→C1.3, 40→C2.5).';
+            . ' (Δ ' . ($fcDiff >= 0 ? '+' : '') . $fcDiff . '). After 30: 30.1–30.4, then Crystal 1 (35), Crystal 2 (40).';
     }
     $bullets[] = 'Battle structure: top-3 alliance power is '
         . formatPower($us['top3_alliance_power'] ?? null) . ' (4627) vs '

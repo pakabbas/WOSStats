@@ -175,7 +175,7 @@ uksort(
                                     <td data-label="24h %" class="<?= changeClass($powerPct24) ?>">
                                         <?= h(formatPercentChange($powerPct24)) ?>
                                     </td>
-                                    <td data-label="Furnace"><?= h(isset($player['stove_lv']) ? (string) $player['stove_lv'] : '—') ?></td>
+                                    <td data-label="Furnace"><?= h(isset($player['stove_lv']) ? formatFurnaceLevel((int) $player['stove_lv']) : '—') ?></td>
                                     <td data-label="Jump"><?= h(formatJumpPct(isset($player['last_jump_pct']) ? (float) $player['last_jump_pct'] : null)) ?></td>
                                     <td data-label="UID" class="muted-cell"><?= h((string) ($player['id'] ?? '—')) ?></td>
                                 </tr>
