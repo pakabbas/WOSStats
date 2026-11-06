@@ -536,40 +536,160 @@ body.nav-drawer-open {
 
 .furnace-levels-card {
     margin-bottom: 1.35rem;
+    padding: 1.15rem 1.15rem 1.2rem;
+    background:
+        radial-gradient(ellipse 70% 90% at 0% 115%, rgba(255, 122, 40, 0.16), transparent 58%),
+        radial-gradient(ellipse 70% 90% at 100% -10%, rgba(94, 200, 255, 0.14), transparent 56%),
+        var(--surface);
+}
+
+.furnace-levels-card.stat-card::before {
+    background: linear-gradient(90deg, #ff8a3d 0%, #ffd166 38%, #5ec8ff 72%, #b388ff 100%);
+    opacity: 0.9;
+}
+
+.furnace-levels-head {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    margin-bottom: 0.85rem;
+}
+
+.furnace-levels-mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+}
+
+.furnace-levels-mark .furnace-glyph {
+    width: 1.35rem;
+    height: 1.35rem;
+    display: block;
+}
+
+.furnace-levels-mark-ember {
+    color: #ff9a3c;
+    filter: drop-shadow(0 0 6px rgba(255, 138, 61, 0.55));
+}
+
+.furnace-levels-mark-ice {
+    color: #7ad4ff;
+    filter: drop-shadow(0 0 6px rgba(94, 200, 255, 0.5));
+}
+
+.furnace-level-group + .furnace-level-group {
+    margin-top: 0.95rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid rgba(125, 168, 210, 0.12);
+}
+
+.furnace-level-group-title {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0 0 0.55rem;
+    font-family: var(--font-display);
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text);
+}
+
+.furnace-level-group-icon {
+    display: inline-flex;
+    color: var(--accent);
+}
+
+.furnace-level-group-icon .furnace-glyph {
+    width: 1rem;
+    height: 1rem;
+    display: block;
+}
+
+.furnace-level-group.is-crystal-group .furnace-level-group-icon {
+    color: #8fd6ff;
+}
+
+.furnace-level-group.is-furnace-group .furnace-level-group-icon {
+    color: #ff9a3c;
 }
 
 .furnace-level-counts {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.5rem 0.65rem;
-    margin-top: 0.15rem;
+    gap: 0.55rem;
 }
 
 .furnace-level-count {
+    --tile-color: #8b9bb3;
+    --tile-glow: rgba(139, 155, 179, 0.2);
     display: flex;
     flex-direction: column;
-    gap: 0.12rem;
-    min-width: 4.4rem;
-    padding: 0.4rem 0.55rem;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: rgba(7, 11, 18, 0.35);
+    align-items: center;
+    gap: 0.22rem;
+    min-width: 5.5rem;
+    padding: 0.62rem 0.55rem 0.55rem;
+    border: 1px solid color-mix(in srgb, var(--tile-color) 42%, transparent);
+    border-radius: 12px;
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--tile-color) 20%, transparent), rgba(7, 11, 18, 0.42));
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        0 0 16px var(--tile-glow);
+}
+
+.furnace-level-count.is-furnace {
+    --tile-color: #ff9a3c;
+    --tile-glow: rgba(255, 138, 61, 0.28);
+}
+
+.furnace-level-count.is-furnace-plus {
+    --tile-color: #ffc14d;
+    --tile-glow: rgba(255, 193, 77, 0.34);
+}
+
+.furnace-level-count.is-crystal-1 { --tile-color: #5ec8ff; --tile-glow: rgba(94, 200, 255, 0.32); }
+.furnace-level-count.is-crystal-2 { --tile-color: #7aa2ff; --tile-glow: rgba(122, 162, 255, 0.34); }
+.furnace-level-count.is-crystal-3 { --tile-color: #b388ff; --tile-glow: rgba(179, 136, 255, 0.36); }
+.furnace-level-count.is-crystal-4 { --tile-color: #2ee6c6; --tile-glow: rgba(46, 230, 198, 0.32); }
+.furnace-level-count.is-crystal-5 { --tile-color: #38bdf8; --tile-glow: rgba(56, 189, 248, 0.32); }
+.furnace-level-count.is-crystal-6 { --tile-color: #818cf8; --tile-glow: rgba(129, 140, 248, 0.34); }
+.furnace-level-count.is-crystal-7 { --tile-color: #e879f9; --tile-glow: rgba(232, 121, 249, 0.34); }
+.furnace-level-count.is-crystal-8 { --tile-color: #fb7185; --tile-glow: rgba(251, 113, 133, 0.34); }
+.furnace-level-count.is-crystal-9 { --tile-color: #fbbf24; --tile-glow: rgba(251, 191, 36, 0.34); }
+.furnace-level-count.is-crystal-10 { --tile-color: #f8e7a0; --tile-glow: rgba(248, 231, 160, 0.38); }
+
+.furnace-level-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.85rem;
+    height: 1.85rem;
+    color: var(--tile-color);
+    filter: drop-shadow(0 0 7px var(--tile-glow));
+}
+
+.furnace-level-icon .furnace-glyph {
+    width: 100%;
+    height: 100%;
+    display: block;
 }
 
 .furnace-level-count-label {
-    font-size: 0.65rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--muted);
+    font-size: 0.68rem;
+    letter-spacing: 0.02em;
+    color: color-mix(in srgb, var(--tile-color) 62%, #e8eef7);
     font-weight: 600;
     white-space: nowrap;
+    line-height: 1.2;
 }
 
 .furnace-level-count-value {
     font-family: var(--font-display);
-    font-size: 1.15rem;
+    font-size: 1.22rem;
     font-weight: 700;
-    color: var(--text);
+    color: #fff;
     line-height: 1.1;
 }
 
