@@ -1297,6 +1297,96 @@ function attachPlayerProgressAlliances(array $rows): array
     return $rows;
 }
 
+/**
+ * Furnace levels for the progress filter dropdowns: every level in the rows,
+ * plus Furnace 30–30.4 and Crystal 1–10.
+ *
+ * @param list<array<string, mixed>> $rows
+ * @return list<int>
+ */
+function progressFurnaceLevelOptions(array $rows): array
+{
+    $levels = [];
+    foreach ($rows as $row) {
+        foreach (['furnace_initial', 'furnace_final'] as $key) {
+            if (!isset($row[$key]) || $row[$key] === null || $row[$key] === '') {
+                continue;
+            }
+            $level = (int) $row[$key];
+            if ($level > 0) {
+                $levels[$level] = true;
+            }
+        }
+    }
+    for ($level = 30; $level <= 34; $level++) {
+        $levels[$level] = true;
+    }
+    for ($tier = 1; $tier <= 10; $tier++) {
+        $levels[35 + (($tier - 1) * 5)] = true;
+    }
+    $list = array_map('intval', array_keys($levels));
+    sort($list, SORT_NUMERIC);
+
+    return $list;
+}
+
+/**
+ * @param list<array<string, mixed>> $rows
+ * @return list<array<string, mixed>>
+ */
+function filterPlayerProgressRows(
+    array $rows,
+    string $allianceQuery = '',
+    ?int $initialMin = null,
+    ?int $initialMax = null,
+    ?int $finalMin = null,
+    ?int $finalMax = null
+): array {
+    $query = strtolower(trim($allianceQuery));
+    if ($query === '' && $initialMin === null && $initialMax === null && $finalMin === null && $finalMax === null) {
+        return $rows;
+    }
+
+    $out = [];
+    foreach ($rows as $row) {
+        if ($query !== '') {
+            $haystack = strtolower((string) ($row['alliance'] ?? ''));
+            if (!str_contains($haystack, $query)) {
+                continue;
+            }
+        }
+        if ($initialMin !== null || $initialMax !== null) {
+            $value = $row['furnace_initial'] ?? null;
+            if ($value === null || $value === '') {
+                continue;
+            }
+            $value = (int) $value;
+            if ($initialMin !== null && $value < $initialMin) {
+                continue;
+            }
+            if ($initialMax !== null && $value > $initialMax) {
+                continue;
+            }
+        }
+        if ($finalMin !== null || $finalMax !== null) {
+            $value = $row['furnace_final'] ?? null;
+            if ($value === null || $value === '') {
+                continue;
+            }
+            $value = (int) $value;
+            if ($finalMin !== null && $value < $finalMin) {
+                continue;
+            }
+            if ($finalMax !== null && $value > $finalMax) {
+                continue;
+            }
+        }
+        $out[] = $row;
+    }
+
+    return $out;
+}
+
 function findSnapshotAtOrBefore(array $history, int $targetTimestamp): ?array
 {
     $best = null;

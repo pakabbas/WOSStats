@@ -25,6 +25,15 @@ $parseDate = static function (?string $value): ?DateTimeImmutable {
     return new DateTimeImmutable($value, new DateTimeZone('UTC'));
 };
 
+$parseLevel = static function (mixed $value): ?int {
+    $value = trim((string) $value);
+    if (preg_match('/^\d+$/', $value) !== 1) {
+        return null;
+    }
+    $level = (int) $value;
+    return ($level > 0 && $level <= 200) ? $level : null;
+};
+
 $startDate = $parseDate($_GET['start'] ?? null) ?? $parseDate($earliestDate);
 $endDate = $parseDate($_GET['end'] ?? null) ?? $parseDate($today);
 if ($startDate !== null && $endDate !== null && $startDate > $endDate) {
@@ -56,6 +65,28 @@ if ($dir !== 'asc' && $dir !== 'desc') {
     $dir = ($sort === 'name' || $sort === 'alliance') ? 'asc' : 'desc';
 }
 
+$allianceQuery = trim((string) ($_GET['alliance'] ?? ''));
+$initialMin = $parseLevel($_GET['furnace_initial_min'] ?? null);
+$initialMax = $parseLevel($_GET['furnace_initial_max'] ?? null);
+$finalMin = $parseLevel($_GET['furnace_final_min'] ?? null);
+$finalMax = $parseLevel($_GET['furnace_final_max'] ?? null);
+if ($initialMin !== null && $initialMax !== null && $initialMin > $initialMax) {
+    [$initialMin, $initialMax] = [$initialMax, $initialMin];
+}
+if ($finalMin !== null && $finalMax !== null && $finalMin > $finalMax) {
+    [$finalMin, $finalMax] = [$finalMax, $finalMin];
+}
+
+$filterParams = array_filter([
+    'alliance' => $allianceQuery,
+    'furnace_initial_min' => $initialMin,
+    'furnace_initial_max' => $initialMax,
+    'furnace_final_min' => $finalMin,
+    'furnace_final_max' => $finalMax,
+], static fn(mixed $value): bool => $value !== null && $value !== '');
+
+$filtersActive = $filterParams !== [];
+
 // Pad the query window by a day so "nearest" can pick a snapshot just outside the range.
 $from = (new DateTimeImmutable('@' . $startTs))->setTimezone(new DateTimeZone('UTC'))
     ->modify('-1 day')->format('Y-m-d H:i:s');
@@ -65,22 +96,30 @@ $to = (new DateTimeImmutable('@' . $endTs))->setTimezone(new DateTimeZone('UTC')
 $history = loadPlayerHistoryBetween($from, $to);
 $built = buildPlayerProgressRows(is_array($history) ? $history : [], $startTs, $endTs);
 $rows = attachPlayerProgressAlliances($built['rows']);
+$furnaceOptions = progressFurnaceLevelOptions($rows);
+$totalPlayers = count($rows);
+$rows = filterPlayerProgressRows($rows, $allianceQuery, $initialMin, $initialMax, $finalMin, $finalMax);
 $rows = sortPlayerProgressRows($rows, $sort, $dir);
 $snapshotCount = $built['snapshot_count'];
 
-$sortUrl = static function (string $key) use ($startKey, $endKey, $sort, $dir): string {
+$sortUrl = static function (string $key) use ($startKey, $endKey, $sort, $dir, $filterParams): string {
     $nextDir = 'desc';
     if ($key === 'name' || $key === 'alliance') {
         $nextDir = ($sort === $key && $dir === 'asc') ? 'desc' : 'asc';
     } elseif ($sort === $key && $dir === 'desc') {
         $nextDir = 'asc';
     }
-    return 'progress-x7k2.php?' . http_build_query([
-        'start' => $startKey,
-        'end' => $endKey,
-        'sort' => $key,
-        'dir' => $nextDir,
-    ]);
+    return 'progress-x7k2.php?' . http_build_query(array_merge(
+        [
+            'start' => $startKey,
+            'end' => $endKey,
+        ],
+        $filterParams,
+        [
+            'sort' => $key,
+            'dir' => $nextDir,
+        ]
+    ));
 };
 
 $ariaSort = static function (string $key) use ($sort, $dir): string {
@@ -88,6 +127,11 @@ $ariaSort = static function (string $key) use ($sort, $dir): string {
         return 'none';
     }
     return $dir === 'asc' ? 'ascending' : 'descending';
+};
+
+$furnaceOption = static function (int $level, ?int $selected): string {
+    $sel = $selected !== null && $selected === $level ? ' selected' : '';
+    return '<option value="' . (int) $level . '"' . $sel . '>' . h(formatFurnaceLevel($level)) . '</option>';
 };
 ?>
 <!DOCTYPE html>
@@ -101,8 +145,15 @@ $ariaSort = static function (string $key) use ($sort, $dir): string {
     <?php renderFaviconTags(); ?>
     <link rel="stylesheet" href="<?= assetUrl('assets/style.css') ?>">
     <style>
-        .progress-form { grid-template-columns: 1fr 1fr auto; }
-        .compare-field input[type="date"] {
+        .progress-form {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+            gap: 1rem;
+            align-items: end;
+        }
+        .compare-field input[type="date"],
+        .compare-field input[type="search"],
+        .compare-field select {
             width: 100%;
             padding: 0.6rem 0.75rem;
             border: 1px solid var(--border);
@@ -112,6 +163,10 @@ $ariaSort = static function (string $key) use ($sort, $dir): string {
             font: inherit;
             outline: none;
         }
+        .progress-form .compare-actions {
+            display: flex;
+            align-items: end;
+        }
         .th-sort-link {
             color: inherit;
             text-decoration: none;
@@ -119,8 +174,19 @@ $ariaSort = static function (string $key) use ($sort, $dir): string {
         .th-sort-link[aria-current="true"] {
             text-decoration: underline;
         }
-        @media (max-width: 700px) {
-            .progress-form { grid-template-columns: 1fr; }
+        .alliance-table th:nth-child(2),
+        .alliance-table td.progress-alliance-cell {
+            max-width: 10rem;
+            width: 10rem;
+        }
+        .progress-alliance-text {
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .alliance-table td[data-label="Player"] {
+            white-space: nowrap;
         }
     </style>
 </head>
@@ -146,6 +212,46 @@ $ariaSort = static function (string $key) use ($sort, $dir): string {
                     <label for="end">End date</label>
                     <input type="date" id="end" name="end" value="<?= h($endKey) ?>" required>
                 </div>
+                <div class="compare-field">
+                    <label for="alliance">Alliance</label>
+                    <input type="search" id="alliance" name="alliance" value="<?= h($allianceQuery) ?>" placeholder="Name or tag" autocomplete="off">
+                </div>
+                <div class="compare-field">
+                    <label for="furnace_initial_min">Initial furnace min</label>
+                    <select id="furnace_initial_min" name="furnace_initial_min">
+                        <option value="">Any</option>
+                        <?php foreach ($furnaceOptions as $level): ?>
+                            <?= $furnaceOption((int) $level, $initialMin) ?>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="compare-field">
+                    <label for="furnace_initial_max">Initial furnace max</label>
+                    <select id="furnace_initial_max" name="furnace_initial_max">
+                        <option value="">Any</option>
+                        <?php foreach ($furnaceOptions as $level): ?>
+                            <?= $furnaceOption((int) $level, $initialMax) ?>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="compare-field">
+                    <label for="furnace_final_min">Final furnace min</label>
+                    <select id="furnace_final_min" name="furnace_final_min">
+                        <option value="">Any</option>
+                        <?php foreach ($furnaceOptions as $level): ?>
+                            <?= $furnaceOption((int) $level, $finalMin) ?>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="compare-field">
+                    <label for="furnace_final_max">Final furnace max</label>
+                    <select id="furnace_final_max" name="furnace_final_max">
+                        <option value="">Any</option>
+                        <?php foreach ($furnaceOptions as $level): ?>
+                            <?= $furnaceOption((int) $level, $finalMax) ?>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
                 <div class="compare-actions">
                     <button type="submit" class="btn-primary">Show</button>
                 </div>
@@ -153,6 +259,9 @@ $ariaSort = static function (string $key) use ($sort, $dir): string {
 
             <p class="subtitle" style="margin-top: 1rem;">
                 <?= (int) count($rows) ?> players
+                <?php if ($filtersActive): ?>
+                    · filtered from <?= (int) $totalPlayers ?>
+                <?php endif; ?>
                 · <?= (int) $snapshotCount ?> snapshots in this window
                 <?php if ($bounds['min'] !== null && $bounds['max'] !== null): ?>
                     · history available <?= h(formatDisplayDate($bounds['min'])) ?>
@@ -200,13 +309,16 @@ $ariaSort = static function (string $key) use ($sort, $dir): string {
                     <tbody>
                         <?php if ($rows === []): ?>
                             <tr>
-                                <td colspan="10" class="empty-cell">No player snapshots in this date range.</td>
+                                <td colspan="10" class="empty-cell">No players match this date range and filters.</td>
                             </tr>
                         <?php else: ?>
                             <?php foreach ($rows as $index => $row): ?>
+                                <?php $allianceLabel = (string) ($row['alliance'] ?? ''); ?>
                                 <tr>
                                     <td data-label="Serial Number"><?= (int) $index + 1 ?></td>
-                                    <td data-label="Alliance"><?= h((string) ($row['alliance'] ?? '')) ?></td>
+                                    <td data-label="Alliance" class="progress-alliance-cell">
+                                        <span class="progress-alliance-text"<?php if ($allianceLabel !== ''): ?> title="<?= h($allianceLabel) ?>"<?php endif; ?>><?= h($allianceLabel) ?></span>
+                                    </td>
                                     <td data-label="Player"><?= h((string) $row['name']) ?></td>
                                     <td data-label="Initial furnace"><?= h(isset($row['furnace_initial']) ? formatFurnaceLevel((int) $row['furnace_initial']) : '—') ?></td>
                                     <td data-label="Final furnace"><?= h(isset($row['furnace_final']) ? formatFurnaceLevel((int) $row['furnace_final']) : '—') ?></td>
