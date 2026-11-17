@@ -1022,23 +1022,46 @@ function sortPlayerProgressRows(array $rows, string $sort, string $dir): array
         $vb = $b[$sort] ?? null;
         $nullA = $va === null || $va === '';
         $nullB = $vb === null || $vb === '';
-        if ($nullA && $nullB) {
-            $cmp = 0;
-        } elseif ($nullA) {
-            return 1;
-        } elseif ($nullB) {
-            return -1;
-        } elseif ($sort === 'name' || $sort === 'alliance') {
-            $cmp = strcasecmp((string) $va, (string) $vb);
-        } elseif ($sort === 'initial_at' || $sort === 'final_at') {
-            $cmp = strcmp((string) $va, (string) $vb);
-        } else {
-            $cmp = $va <=> $vb;
+        // Blank values always sort last, in both directions.
+        if ($nullA !== $nullB) {
+            return $nullA ? 1 : -1;
         }
-        if ($cmp === 0) {
-            $cmp = strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? ''));
+
+        $cmp = 0;
+        if (!$nullA) {
+            if ($sort === 'name' || $sort === 'alliance') {
+                $cmp = strcasecmp((string) $va, (string) $vb);
+            } elseif ($sort === 'initial_at' || $sort === 'final_at') {
+                $cmp = strcmp((string) $va, (string) $vb);
+            } else {
+                $cmp = $va <=> $vb;
+            }
+            if ($cmp !== 0) {
+                return $dir === 'asc' ? $cmp : -$cmp;
+            }
         }
-        return $dir === 'asc' ? $cmp : -$cmp;
+
+        if ($sort === 'alliance') {
+            $powerA = $a['power_final'] ?? null;
+            $powerB = $b['power_final'] ?? null;
+            $powerAMissing = $powerA === null || $powerA === '';
+            $powerBMissing = $powerB === null || $powerB === '';
+            if ($powerAMissing !== $powerBMissing) {
+                return $powerAMissing ? 1 : -1;
+            }
+            if (!$powerAMissing) {
+                $powerCmp = ((int) $powerB) <=> ((int) $powerA);
+                if ($powerCmp !== 0) {
+                    return $powerCmp;
+                }
+            }
+        }
+
+        $nameCmp = strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? ''));
+        if ($sort === 'alliance') {
+            return $nameCmp;
+        }
+        return $dir === 'asc' ? $nameCmp : -$nameCmp;
     });
 
     return $rows;
