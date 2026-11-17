@@ -921,3 +921,60 @@ function dbUpsertIncident(array $incident): void
         dbEncodePayload($incident),
     ]);
 }
+
+/**
+ * @return array{min: ?string, max: ?string, count: int}
+ */
+function dbPlayerHistoryBounds(): array
+{
+    dbEnsureSchema();
+    $row = db()->query(
+        'SELECT MIN(captured_at) AS min_at, MAX(captured_at) AS max_at, COUNT(*) AS n FROM player_history'
+    )->fetch();
+
+    return [
+        'min' => isset($row['min_at']) && $row['min_at'] !== '' ? (string) $row['min_at'] : null,
+        'max' => isset($row['max_at']) && $row['max_at'] !== '' ? (string) $row['max_at'] : null,
+        'count' => isset($row['n']) ? (int) $row['n'] : 0,
+    ];
+}
+
+/**
+ * Load player_history snapshots whose captured_at falls between $from and $to (inclusive).
+ *
+ * @return list<array<string, mixed>>
+ */
+function dbLoadPlayerHistoryBetween(string $from, string $to): array
+{
+    dbEnsureSchema();
+    $stmt = db()->prepare(
+        'SELECT captured_at AS timestamp, source, match_by, mode, payload
+         FROM player_history
+         WHERE captured_at >= ? AND captured_at <= ?
+         ORDER BY captured_at ASC, id ASC'
+    );
+    $stmt->execute([$from, $to]);
+
+    $out = [];
+    foreach ($stmt->fetchAll() as $row) {
+        $payload = dbDecodePayload($row['payload'] ?? null, []);
+        if (!is_array($payload)) {
+            continue;
+        }
+        if (!isset($payload['timestamp'])) {
+            $payload['timestamp'] = $row['timestamp'];
+        }
+        if (!empty($row['source']) && !isset($payload['source'])) {
+            $payload['source'] = $row['source'];
+        }
+        if (!empty($row['match_by']) && !isset($payload['match_by'])) {
+            $payload['match_by'] = $row['match_by'];
+        }
+        if (!empty($row['mode']) && !isset($payload['mode'])) {
+            $payload['mode'] = $row['mode'];
+        }
+        $out[] = $payload;
+    }
+
+    return $out;
+}

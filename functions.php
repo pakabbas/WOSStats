@@ -816,6 +816,233 @@ function nowUtc(): string
     return (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s');
 }
 
+/**
+ * @return array{min: ?string, max: ?string, count: int}
+ */
+function playerHistoryTimeBounds(): array
+{
+    if (dbAvailable()) {
+        try {
+            return dbPlayerHistoryBounds();
+        } catch (Throwable $e) {
+            // Fall back to the full history load below.
+        }
+    }
+
+    $history = loadJson(PLAYERS_HISTORY_FILE, []);
+    $min = null;
+    $max = null;
+    $count = 0;
+    if (is_array($history)) {
+        foreach ($history as $snapshot) {
+            if (!is_array($snapshot) || empty($snapshot['timestamp'])) {
+                continue;
+            }
+            $ts = (string) $snapshot['timestamp'];
+            $count++;
+            if ($min === null || $ts < $min) {
+                $min = $ts;
+            }
+            if ($max === null || $ts > $max) {
+                $max = $ts;
+            }
+        }
+    }
+
+    return ['min' => $min, 'max' => $max, 'count' => $count];
+}
+
+/**
+ * Load player history snapshots in an inclusive captured_at window.
+ *
+ * @return list<array<string, mixed>>
+ */
+function loadPlayerHistoryBetween(string $from, string $to): array
+{
+    if (dbAvailable()) {
+        try {
+            return dbLoadPlayerHistoryBetween($from, $to);
+        } catch (Throwable $e) {
+            // Fall back to filtering the full history load below.
+        }
+    }
+
+    $history = loadJson(PLAYERS_HISTORY_FILE, []);
+    if (!is_array($history)) {
+        return [];
+    }
+
+    $out = [];
+    foreach ($history as $snapshot) {
+        if (!is_array($snapshot) || empty($snapshot['timestamp'])) {
+            continue;
+        }
+        $ts = (string) $snapshot['timestamp'];
+        if ($ts >= $from && $ts <= $to) {
+            $out[] = $snapshot;
+        }
+    }
+
+    return $out;
+}
+
+/**
+ * Pick the appearance whose timestamp is nearest $targetTs.
+ * On a tie, $preferLater chooses the later snapshot (used for the end date).
+ *
+ * @param list<array{timestamp: string, ts: int, name: string, power: ?int, stove_lv: ?int}> $appearances
+ * @return array{timestamp: string, ts: int, name: string, power: ?int, stove_lv: ?int}|null
+ */
+function nearestPlayerAppearance(array $appearances, int $targetTs, bool $preferLater = false): ?array
+{
+    $best = null;
+    $bestDist = null;
+    foreach ($appearances as $appearance) {
+        $ts = $appearance['ts'] ?? null;
+        if (!is_int($ts)) {
+            continue;
+        }
+        $dist = abs($ts - $targetTs);
+        if ($bestDist === null || $dist < $bestDist) {
+            $best = $appearance;
+            $bestDist = $dist;
+            continue;
+        }
+        if ($dist === $bestDist && $preferLater && $ts > ($best['ts'] ?? 0)) {
+            $best = $appearance;
+        }
+    }
+
+    return $best;
+}
+
+/**
+ * Build per-player initial/final furnace and power rows from hourly snapshots.
+ *
+ * @param list<array<string, mixed>> $history
+ * @return array{rows: list<array<string, mixed>>, snapshot_count: int}
+ */
+function buildPlayerProgressRows(array $history, int $startTs, int $endTs): array
+{
+    $byPlayer = [];
+    $snapshotCount = 0;
+
+    foreach ($history as $snapshot) {
+        if (!is_array($snapshot) || empty($snapshot['timestamp'])) {
+            continue;
+        }
+        $stamp = (string) $snapshot['timestamp'];
+        $ts = strtotime($stamp);
+        if ($ts === false) {
+            continue;
+        }
+        $players = $snapshot['players'] ?? null;
+        if (!is_array($players)) {
+            continue;
+        }
+        $snapshotCount++;
+        foreach ($players as $player) {
+            if (!is_array($player)) {
+                continue;
+            }
+            $id = trim((string) ($player['id'] ?? ''));
+            $name = trim((string) ($player['name'] ?? ''));
+            $key = $id !== '' ? $id : ('name:' . strtolower($name));
+            if ($key === 'name:') {
+                continue;
+            }
+            $power = $player['power'] ?? null;
+            $stove = $player['stove_lv'] ?? null;
+            $byPlayer[$key][] = [
+                'timestamp' => $stamp,
+                'ts' => $ts,
+                'name' => $name !== '' ? $name : 'Unknown',
+                'power' => ($power !== null && $power !== '') ? (int) $power : null,
+                'stove_lv' => ($stove !== null && $stove !== '') ? (int) $stove : null,
+            ];
+        }
+    }
+
+    $rows = [];
+    foreach ($byPlayer as $key => $appearances) {
+        $initial = nearestPlayerAppearance($appearances, $startTs, false);
+        $final = nearestPlayerAppearance($appearances, $endTs, true);
+        if ($initial === null && $final === null) {
+            continue;
+        }
+        $powerInitial = $initial['power'] ?? null;
+        $powerFinal = $final['power'] ?? null;
+        $rows[] = [
+            'id' => str_starts_with((string) $key, 'name:') ? '' : (string) $key,
+            'name' => (string) ($final['name'] ?? $initial['name'] ?? 'Unknown'),
+            'furnace_initial' => $initial['stove_lv'] ?? null,
+            'furnace_final' => $final['stove_lv'] ?? null,
+            'power_initial' => $powerInitial,
+            'power_final' => $powerFinal,
+            'power_change' => ($powerInitial !== null && $powerFinal !== null)
+                ? ($powerFinal - $powerInitial)
+                : null,
+            'initial_at' => $initial['timestamp'] ?? null,
+            'final_at' => $final['timestamp'] ?? null,
+        ];
+    }
+
+    return [
+        'rows' => $rows,
+        'snapshot_count' => $snapshotCount,
+    ];
+}
+
+/**
+ * @param list<array<string, mixed>> $rows
+ * @return list<array<string, mixed>>
+ */
+function sortPlayerProgressRows(array $rows, string $sort, string $dir): array
+{
+    $allowed = [
+        'name',
+        'furnace_initial',
+        'furnace_final',
+        'power_initial',
+        'power_final',
+        'power_change',
+        'initial_at',
+        'final_at',
+    ];
+    if (!in_array($sort, $allowed, true)) {
+        $sort = 'power_final';
+    }
+    if ($dir !== 'asc' && $dir !== 'desc') {
+        $dir = $sort === 'name' ? 'asc' : 'desc';
+    }
+
+    usort($rows, static function (array $a, array $b) use ($sort, $dir): int {
+        $va = $a[$sort] ?? null;
+        $vb = $b[$sort] ?? null;
+        $nullA = $va === null || $va === '';
+        $nullB = $vb === null || $vb === '';
+        if ($nullA && $nullB) {
+            $cmp = 0;
+        } elseif ($nullA) {
+            return 1;
+        } elseif ($nullB) {
+            return -1;
+        } elseif ($sort === 'name') {
+            $cmp = strcasecmp((string) $va, (string) $vb);
+        } elseif ($sort === 'initial_at' || $sort === 'final_at') {
+            $cmp = strcmp((string) $va, (string) $vb);
+        } else {
+            $cmp = $va <=> $vb;
+        }
+        if ($cmp === 0) {
+            $cmp = strcasecmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? ''));
+        }
+        return $dir === 'asc' ? $cmp : -$cmp;
+    });
+
+    return $rows;
+}
+
 function findSnapshotAtOrBefore(array $history, int $targetTimestamp): ?array
 {
     $best = null;
