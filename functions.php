@@ -1001,6 +1001,7 @@ function sortPlayerProgressRows(array $rows, string $sort, string $dir): array
 {
     $allowed = [
         'name',
+        'alliance',
         'furnace_initial',
         'furnace_final',
         'power_initial',
@@ -1013,7 +1014,7 @@ function sortPlayerProgressRows(array $rows, string $sort, string $dir): array
         $sort = 'power_final';
     }
     if ($dir !== 'asc' && $dir !== 'desc') {
-        $dir = $sort === 'name' ? 'asc' : 'desc';
+        $dir = ($sort === 'name' || $sort === 'alliance') ? 'asc' : 'desc';
     }
 
     usort($rows, static function (array $a, array $b) use ($sort, $dir): int {
@@ -1027,7 +1028,7 @@ function sortPlayerProgressRows(array $rows, string $sort, string $dir): array
             return 1;
         } elseif ($nullB) {
             return -1;
-        } elseif ($sort === 'name') {
+        } elseif ($sort === 'name' || $sort === 'alliance') {
             $cmp = strcasecmp((string) $va, (string) $vb);
         } elseif ($sort === 'initial_at' || $sort === 'final_at') {
             $cmp = strcmp((string) $va, (string) $vb);
@@ -1039,6 +1040,259 @@ function sortPlayerProgressRows(array $rows, string $sort, string $dir): array
         }
         return $dir === 'asc' ? $cmp : -$cmp;
     });
+
+    return $rows;
+}
+
+function formatAllianceLabel(?string $name, ?string $tag): string
+{
+    $name = trim((string) $name);
+    $tag = trim((string) $tag);
+    if ($name !== '' && $tag !== '') {
+        return $name . ' [' . $tag . ']';
+    }
+    if ($name !== '') {
+        return $name;
+    }
+    if ($tag !== '') {
+        return '[' . $tag . ']';
+    }
+
+    return '';
+}
+
+/**
+ * Map alliance id and tag to the current name and tag.
+ * Names come from the alliances table, with alliance_history as a fallback.
+ *
+ * @return array{by_id: array<string, array{name: ?string, tag: ?string}>, by_tag: array<string, array{name: ?string, tag: ?string}>}
+ */
+function loadAllianceNameDirectory(): array
+{
+    $byId = [];
+    $byTag = [];
+    $alliances = loadJson(ALLIANCES_FILE, []);
+    if (is_array($alliances)) {
+        foreach ($alliances as $alliance) {
+            if (!is_array($alliance)) {
+                continue;
+            }
+            $id = trim((string) ($alliance['id'] ?? ''));
+            $name = trim((string) ($alliance['name'] ?? ''));
+            $tag = trim((string) ($alliance['tag'] ?? ''));
+            $info = [
+                'name' => $name !== '' ? $name : null,
+                'tag' => $tag !== '' ? $tag : null,
+            ];
+            if ($id !== '') {
+                $byId[$id] = $info;
+            }
+            if ($tag !== '') {
+                $byTag[$tag] = $info;
+            }
+        }
+    }
+
+    $needsHistory = false;
+    foreach ($byId as $info) {
+        if (empty($info['name'])) {
+            $needsHistory = true;
+            break;
+        }
+    }
+    if ($needsHistory || $byId === []) {
+        $history = loadJson(HISTORY_FILE, []);
+        if (is_array($history)) {
+            for ($i = count($history) - 1; $i >= 0; $i--) {
+                $snapshot = $history[$i] ?? null;
+                if (!is_array($snapshot) || !is_array($snapshot['alliances'] ?? null)) {
+                    continue;
+                }
+                foreach ($snapshot['alliances'] as $alliance) {
+                    if (!is_array($alliance)) {
+                        continue;
+                    }
+                    $id = trim((string) ($alliance['id'] ?? ''));
+                    $name = trim((string) ($alliance['name'] ?? ''));
+                    $tag = trim((string) ($alliance['tag'] ?? ''));
+                    if ($id !== '' && (!isset($byId[$id]['name']) || $byId[$id]['name'] === null) && $name !== '') {
+                        $byId[$id] = [
+                            'name' => $name,
+                            'tag' => $tag !== '' ? $tag : ($byId[$id]['tag'] ?? null),
+                        ];
+                        if ($tag !== '' && !isset($byTag[$tag])) {
+                            $byTag[$tag] = $byId[$id];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return ['by_id' => $byId, 'by_tag' => $byTag];
+}
+
+/**
+ * Current players table: id (and lowercase name) → alliance_id / alliance_tag.
+ *
+ * @return array{by_id: array<string, array{alliance_id: ?string, alliance_tag: ?string}>, by_name: array<string, array{alliance_id: ?string, alliance_tag: ?string}>}
+ */
+function loadCurrentPlayerAllianceMap(): array
+{
+    $byId = [];
+    $byName = [];
+    $players = loadJson(PLAYERS_FILE, []);
+    if (!is_array($players)) {
+        return ['by_id' => $byId, 'by_name' => $byName];
+    }
+    foreach ($players as $player) {
+        if (!is_array($player)) {
+            continue;
+        }
+        $id = trim((string) ($player['id'] ?? ''));
+        $nameKey = strtolower(trim((string) ($player['name'] ?? '')));
+        $info = [
+            'alliance_id' => trim((string) ($player['alliance_id'] ?? '')) ?: null,
+            'alliance_tag' => trim((string) ($player['alliance_tag'] ?? '')) ?: null,
+        ];
+        if ($info['alliance_id'] === null && $info['alliance_tag'] === null) {
+            continue;
+        }
+        if ($id !== '') {
+            $byId[$id] = $info;
+        }
+        if ($nameKey !== '') {
+            $byName[$nameKey] = $info;
+        }
+    }
+
+    return ['by_id' => $byId, 'by_name' => $byName];
+}
+
+/**
+ * Most recent roster_history membership for each player id.
+ *
+ * @return array<string, array{alliance_id: string, alliance_tag: ?string, timestamp: string}>
+ */
+function loadLatestRosterMembershipMap(): array
+{
+    $best = [];
+    $history = loadJson(ROSTERS_HISTORY_FILE, []);
+    if (!is_array($history) || $history === []) {
+        foreach (buildPlayerAllianceLookupFromRosters() as $uid => $info) {
+            $aid = trim((string) ($info['alliance_id'] ?? ''));
+            if ($uid === '' || $aid === '') {
+                continue;
+            }
+            $best[$uid] = [
+                'alliance_id' => $aid,
+                'alliance_tag' => isset($info['alliance_tag']) && $info['alliance_tag'] !== ''
+                    ? (string) $info['alliance_tag']
+                    : null,
+                'timestamp' => '',
+            ];
+        }
+        return $best;
+    }
+
+    foreach ($history as $allianceId => $snapshots) {
+        $allianceId = trim((string) $allianceId);
+        if ($allianceId === '' || !is_array($snapshots)) {
+            continue;
+        }
+        foreach ($snapshots as $snapshot) {
+            if (!is_array($snapshot) || !is_array($snapshot['members'] ?? null)) {
+                continue;
+            }
+            $ts = (string) ($snapshot['timestamp'] ?? '');
+            foreach ($snapshot['members'] as $member) {
+                if (!is_array($member)) {
+                    continue;
+                }
+                $uid = trim((string) ($member['id'] ?? $member['uid'] ?? ''));
+                if ($uid === '') {
+                    continue;
+                }
+                if (isset($best[$uid]) && ($best[$uid]['timestamp'] ?? '') >= $ts) {
+                    continue;
+                }
+                $tag = trim((string) ($member['abbr'] ?? $member['tag'] ?? $snapshot['tag'] ?? ''));
+                $best[$uid] = [
+                    'alliance_id' => $allianceId,
+                    'alliance_tag' => $tag !== '' ? $tag : null,
+                    'timestamp' => $ts,
+                ];
+            }
+        }
+    }
+
+    return $best;
+}
+
+/**
+ * Attach a display alliance label to each progress row.
+ * Prefers the current players table joined to alliances; falls back to the
+ * player's most recent roster_history membership.
+ *
+ * @param list<array<string, mixed>> $rows
+ * @return list<array<string, mixed>>
+ */
+function attachPlayerProgressAlliances(array $rows): array
+{
+    if ($rows === []) {
+        return $rows;
+    }
+
+    $directory = loadAllianceNameDirectory();
+    $current = loadCurrentPlayerAllianceMap();
+    $roster = null;
+
+    $labelFor = static function (?string $allianceId, ?string $allianceTag) use ($directory): string {
+        $info = null;
+        $allianceId = trim((string) $allianceId);
+        $allianceTag = trim((string) $allianceTag);
+        if ($allianceId !== '' && isset($directory['by_id'][$allianceId])) {
+            $info = $directory['by_id'][$allianceId];
+        } elseif ($allianceTag !== '' && isset($directory['by_tag'][$allianceTag])) {
+            $info = $directory['by_tag'][$allianceTag];
+        }
+        $name = $info['name'] ?? null;
+        $tag = $info['tag'] ?? ($allianceTag !== '' ? $allianceTag : null);
+        return formatAllianceLabel($name, $tag);
+    };
+
+    foreach ($rows as &$row) {
+        $id = trim((string) ($row['id'] ?? ''));
+        $nameKey = strtolower(trim((string) ($row['name'] ?? '')));
+        $label = '';
+        $source = '';
+        $info = null;
+        if ($id !== '' && isset($current['by_id'][$id])) {
+            $info = $current['by_id'][$id];
+        } elseif ($nameKey !== '' && isset($current['by_name'][$nameKey])) {
+            $info = $current['by_name'][$nameKey];
+        }
+        if ($info !== null) {
+            $label = $labelFor($info['alliance_id'] ?? null, $info['alliance_tag'] ?? null);
+            if ($label !== '') {
+                $source = 'players';
+            }
+        }
+        if ($label === '' && $id !== '') {
+            if ($roster === null) {
+                $roster = loadLatestRosterMembershipMap();
+            }
+            if (isset($roster[$id])) {
+                $label = $labelFor($roster[$id]['alliance_id'] ?? null, $roster[$id]['alliance_tag'] ?? null);
+                if ($label !== '') {
+                    $source = 'roster_history';
+                }
+            }
+        }
+        $row['alliance'] = $label;
+        $row['alliance_source'] = $source;
+    }
+    unset($row);
 
     return $rows;
 }

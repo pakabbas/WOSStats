@@ -38,6 +38,7 @@ $endTs = $endDate?->setTime(23, 59, 59)->getTimestamp() ?? strtotime($endKey . '
 
 $allowedSorts = [
     'name',
+    'alliance',
     'furnace_initial',
     'furnace_final',
     'power_initial',
@@ -52,7 +53,7 @@ if (!in_array($sort, $allowedSorts, true)) {
 }
 $dir = strtolower(trim((string) ($_GET['dir'] ?? '')));
 if ($dir !== 'asc' && $dir !== 'desc') {
-    $dir = $sort === 'name' ? 'asc' : 'desc';
+    $dir = ($sort === 'name' || $sort === 'alliance') ? 'asc' : 'desc';
 }
 
 // Pad the query window by a day so "nearest" can pick a snapshot just outside the range.
@@ -63,12 +64,13 @@ $to = (new DateTimeImmutable('@' . $endTs))->setTimezone(new DateTimeZone('UTC')
 
 $history = loadPlayerHistoryBetween($from, $to);
 $built = buildPlayerProgressRows(is_array($history) ? $history : [], $startTs, $endTs);
-$rows = sortPlayerProgressRows($built['rows'], $sort, $dir);
+$rows = attachPlayerProgressAlliances($built['rows']);
+$rows = sortPlayerProgressRows($rows, $sort, $dir);
 $snapshotCount = $built['snapshot_count'];
 
 $sortUrl = static function (string $key) use ($startKey, $endKey, $sort, $dir): string {
     $nextDir = 'desc';
-    if ($key === 'name') {
+    if ($key === 'name' || $key === 'alliance') {
         $nextDir = ($sort === $key && $dir === 'asc') ? 'desc' : 'asc';
     } elseif ($sort === $key && $dir === 'desc') {
         $nextDir = 'asc';
@@ -166,6 +168,9 @@ $ariaSort = static function (string $key) use ($sort, $dir): string {
                     <thead>
                         <tr>
                             <th>Serial Number</th>
+                            <th aria-sort="<?= h($ariaSort('alliance')) ?>">
+                                <a class="th-sort-link" href="<?= h($sortUrl('alliance')) ?>"<?= $sort === 'alliance' ? ' aria-current="true"' : '' ?>>Alliance</a>
+                            </th>
                             <th aria-sort="<?= h($ariaSort('name')) ?>">
                                 <a class="th-sort-link" href="<?= h($sortUrl('name')) ?>"<?= $sort === 'name' ? ' aria-current="true"' : '' ?>>Player</a>
                             </th>
@@ -195,12 +200,13 @@ $ariaSort = static function (string $key) use ($sort, $dir): string {
                     <tbody>
                         <?php if ($rows === []): ?>
                             <tr>
-                                <td colspan="9" class="empty-cell">No player snapshots in this date range.</td>
+                                <td colspan="10" class="empty-cell">No player snapshots in this date range.</td>
                             </tr>
                         <?php else: ?>
                             <?php foreach ($rows as $index => $row): ?>
                                 <tr>
                                     <td data-label="Serial Number"><?= (int) $index + 1 ?></td>
+                                    <td data-label="Alliance"><?= h((string) ($row['alliance'] ?? '')) ?></td>
                                     <td data-label="Player"><?= h((string) $row['name']) ?></td>
                                     <td data-label="Initial furnace"><?= h(isset($row['furnace_initial']) ? formatFurnaceLevel((int) $row['furnace_initial']) : '—') ?></td>
                                     <td data-label="Final furnace"><?= h(isset($row['furnace_final']) ? formatFurnaceLevel((int) $row['furnace_final']) : '—') ?></td>
