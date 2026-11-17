@@ -165,6 +165,7 @@ $ariaSort = static function (string $key) use ($sort, $dir): string {
                 <table class="alliance-table responsive-table">
                     <thead>
                         <tr>
+                            <th>Serial Number</th>
                             <th aria-sort="<?= h($ariaSort('name')) ?>">
                                 <a class="th-sort-link" href="<?= h($sortUrl('name')) ?>"<?= $sort === 'name' ? ' aria-current="true"' : '' ?>>Player</a>
                             </th>
@@ -194,11 +195,12 @@ $ariaSort = static function (string $key) use ($sort, $dir): string {
                     <tbody>
                         <?php if ($rows === []): ?>
                             <tr>
-                                <td colspan="8" class="empty-cell">No player snapshots in this date range.</td>
+                                <td colspan="9" class="empty-cell">No player snapshots in this date range.</td>
                             </tr>
                         <?php else: ?>
-                            <?php foreach ($rows as $row): ?>
+                            <?php foreach ($rows as $index => $row): ?>
                                 <tr>
+                                    <td data-label="Serial Number"><?= (int) $index + 1 ?></td>
                                     <td data-label="Player"><?= h((string) $row['name']) ?></td>
                                     <td data-label="Initial furnace"><?= h(isset($row['furnace_initial']) ? formatFurnaceLevel((int) $row['furnace_initial']) : '—') ?></td>
                                     <td data-label="Final furnace"><?= h(isset($row['furnace_final']) ? formatFurnaceLevel((int) $row['furnace_final']) : '—') ?></td>
